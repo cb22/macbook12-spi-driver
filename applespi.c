@@ -9,6 +9,7 @@
 #include <linux/delay.h>
 
 #include <linux/input.h>
+#include <linux/input/mt.h>
 #include <linux/input-polldev.h>
 
 #define APPLESPI_PACKET_SIZE    256
@@ -16,6 +17,21 @@
 #define PACKET_KEYBOARD         288
 #define PACKET_TOUCHPAD         544
 #define PACKET_NOTHING          53312
+
+/* logical signal quality */
+#define SN_PRESSURE	45		/* pressure signal-to-noise ratio */
+#define SN_WIDTH	25		/* width signal-to-noise ratio */
+#define SN_COORD	250		/* coordinate signal-to-noise ratio */
+#define SN_ORIENT	10		/* orientation signal-to-noise ratio */
+
+#define MAX_FINGERS		6
+#define MAX_FINGER_ORIENTATION	16384
+
+#define X_MIN -4828
+#define X_MAX 5345
+
+#define Y_MIN -203
+#define Y_MAX 6803
 
 struct keyboard_protocol {
 	u16		packet_type;
@@ -30,6 +46,23 @@ struct keyboard_protocol {
 	u8		unused[228];
 };
 
+/* trackpad finger structure, le16-aligned */
+struct tp_finger {
+	__le16 origin;          /* zero when switching track finger */
+	__le16 abs_x;           /* absolute x coodinate */
+	__le16 abs_y;           /* absolute y coodinate */
+	__le16 rel_x;           /* relative x coodinate */
+	__le16 rel_y;           /* relative y coodinate */
+	__le16 tool_major;      /* tool area, major axis */
+	__le16 tool_minor;      /* tool area, minor axis */
+	__le16 orientation;     /* 16384 when point, else 15 bit angle */
+	__le16 touch_major;     /* touch area, major axis */
+	__le16 touch_minor;     /* touch area, minor axis */
+	__le16 unused[2];       /* zeros */
+	__le16 pressure;        /* pressure on forcetouch touchpad */
+	__le16 multi;           /* one finger: varies, more fingers: constant */
+} __attribute__((packed,aligned(2)));
+
 struct touchpad_protocol {
 	u16		packet_type;
 	u8		unknown1[4];
@@ -42,12 +75,15 @@ struct touchpad_protocol {
 	u8		clicked;
 	u8		rel_x;
 	u8		rel_y;
-	u8		unused[236];
+	u8		unknown4[44];
+	struct tp_finger finger1;
+	u8		unknown5[208];
 };
 
 struct applespi_data {
 	struct spi_device		*spi;
 	struct input_polled_dev		*poll_dev;
+	struct input_dev		*touchpad_input_dev;
 
 	u8				*tx_buffer;
 	u8				*rx_buffer;
@@ -55,6 +91,8 @@ struct applespi_data {
 	struct mutex			mutex;
 
 	u8				last_keys_pressed[6];
+	struct input_mt_pos pos[MAX_FINGERS];
+	int slots[MAX_FINGERS];
 };
 
 static const unsigned char applespi_scancodes[] = {
@@ -187,10 +225,10 @@ static void applespi_open(struct input_polled_dev *dev)
 	pr_info("opened");
 
 	for (i=0; i < 14; i++) {
-		pr_info("wtfbuf %d", i);
+//		pr_info("wtfbuf %d", i);
 		memcpy(applespi->tx_buffer, applespi_init_commands[i], 256);
 		applespi_sync_write_and_response(applespi);
-		print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, applespi->rx_buffer, APPLESPI_PACKET_SIZE, false);
+//		print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, applespi->rx_buffer, APPLESPI_PACKET_SIZE, false);
 	}
 
 	pr_info("inited");
@@ -199,6 +237,72 @@ static void applespi_open(struct input_polled_dev *dev)
 static void applespi_close(struct input_polled_dev *dev)
 {
 	pr_info("closed");
+}
+
+static void applespi_print_touchpad_frame(struct touchpad_protocol* t)
+{
+	pr_info("Rel X: %d, Rel Y: %d, Pressure 1: %d, abs_x: %d, abs_y: %d", t->rel_x, t->rel_y, t->finger1.pressure, t->finger1.abs_x, t->finger1.abs_y);
+	print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, t, 94, false);
+}
+
+
+// Lifted from the BCM5974 driver
+/* convert 16-bit little endian to signed integer */
+static inline int raw2int(__le16 x)
+{
+	return (signed short)le16_to_cpu(x);
+}
+
+static void report_finger_data(struct input_dev *input, int slot,
+			       const struct input_mt_pos *pos,
+			       const struct tp_finger *f)
+{
+	input_mt_slot(input, slot);
+	input_mt_report_slot_state(input, MT_TOOL_FINGER, true);
+
+	input_report_abs(input, ABS_MT_TOUCH_MAJOR,
+			 raw2int(f->touch_major) << 1);
+	input_report_abs(input, ABS_MT_TOUCH_MINOR,
+			 raw2int(f->touch_minor) << 1);
+	input_report_abs(input, ABS_MT_WIDTH_MAJOR,
+			 raw2int(f->tool_major) << 1);
+	input_report_abs(input, ABS_MT_WIDTH_MINOR,
+			 raw2int(f->tool_minor) << 1);
+	input_report_abs(input, ABS_MT_ORIENTATION,
+			 MAX_FINGER_ORIENTATION - raw2int(f->orientation));
+	input_report_abs(input, ABS_MT_POSITION_X, pos->x);
+	input_report_abs(input, ABS_MT_POSITION_Y, pos->y);
+}
+
+static int report_tp_state(struct applespi_data *applespi, struct touchpad_protocol* t)
+{
+	const struct tp_finger *f;
+	struct input_dev *input = applespi->touchpad_input_dev;
+	int i, n;
+
+	n = 0;
+
+	for (i = 0; i < 1; i++) {
+		f = &t->finger1;
+		if (raw2int(f->touch_major) == 0)
+			continue;
+		applespi->pos[n].x = raw2int(f->abs_x);
+		applespi->pos[n].y = Y_MIN + Y_MAX - raw2int(f->abs_y);
+		n++;
+	}
+
+//	pr_info("x: %d, y: %d", applespi->pos[0].x, applespi->pos[0].y);
+	input_mt_assign_slots(input, applespi->slots, applespi->pos, n, 0);
+
+	for (i = 0; i < n; i++)
+		report_finger_data(input, applespi->slots[i],
+				   &applespi->pos[i], &t->finger1);
+
+	input_mt_sync_frame(input);
+	input_report_key(input, BTN_LEFT, t->clicked);
+
+	input_sync(input);
+	return 0;
 }
 
 static void
@@ -247,12 +351,10 @@ applespi_got_data(struct applespi_data *applespi)
 		input_sync(applespi->poll_dev->input);
 		memcpy(&applespi->last_keys_pressed, keyboard_protocol.keys_pressed, sizeof(applespi->last_keys_pressed));
 	} else if (keyboard_protocol.packet_type == PACKET_TOUCHPAD) {
-		pr_info("--- %d", keyboard_protocol.packet_type);
-		print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, &keyboard_protocol, APPLESPI_PACKET_SIZE, false);
+//		pr_info("--- %d", keyboard_protocol.packet_type);
+//		applespi_print_touchpad_frame((struct touchpad_protocol*)&keyboard_protocol);
+		report_tp_state(applespi, (struct touchpad_protocol*)&keyboard_protocol);
 
-		input_report_rel(applespi->poll_dev->input, REL_X, ((struct touchpad_protocol*)&keyboard_protocol)->rel_x);
-		input_report_rel(applespi->poll_dev->input, REL_Y, ((struct touchpad_protocol*)&keyboard_protocol)->rel_y);
-		input_sync(applespi->poll_dev->input);
 	} else {
 //		pr_info("--- %d", keyboard_protocol.packet_type);
 //		print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, &keyboard_protocol, APPLESPI_PACKET_SIZE, false);
@@ -264,10 +366,8 @@ static void applespi_poll(struct input_polled_dev *dev)
 {
 	struct applespi_data *applespi = dev->private;
 
-//	mutex_lock(&applespi->mutex);
 	applespi_sync_read(applespi);
 	applespi_got_data(applespi);
-//	mutex_unlock(&applespi->mutex);
 }
 
 static int applespi_probe(struct spi_device *spi)
@@ -302,25 +402,28 @@ static int applespi_probe(struct spi_device *spi)
 		return result;
 	}
 
+	// Setup the poll_dev, which is also the keyboard input
 	applespi->poll_dev = devm_input_allocate_polled_device(&spi->dev);
+
 	if (!applespi->poll_dev)
 		return -ENOMEM;
 
 	applespi->poll_dev->private = applespi;
-	applespi->poll_dev->poll_interval = 20;
+	applespi->poll_dev->poll_interval = 1;
 	applespi->poll_dev->poll_interval_min = 1;
-	applespi->poll_dev->poll_interval_max = 100;
+	applespi->poll_dev->poll_interval_max = 1;
 
 	applespi->poll_dev->open = applespi_open;
 	applespi->poll_dev->close = applespi_close;
 	applespi->poll_dev->poll = applespi_poll;
 
-	applespi->poll_dev->input->name = "Apple SPI Keyboard / Mouse";
+	applespi->poll_dev->input->name = "Apple SPI Keyboard";
 	applespi->poll_dev->input->phys = "applespi/input0";
 	applespi->poll_dev->input->dev.parent = &spi->dev;
 	applespi->poll_dev->input->id.bustype = BUS_SPI;
 
-	applespi->poll_dev->input->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_REP);
+	applespi->poll_dev->input->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_LED) | BIT_MASK(EV_REP);
+	applespi->poll_dev->input->ledbit[0] = BIT_MASK(LED_CAPSL);
 
 	for (i = 0; i<sizeof(applespi_scancodes); i++) {
 		if (applespi_scancodes[i]) {
@@ -334,12 +437,58 @@ static int applespi_probe(struct spi_device *spi)
 		}
 	}
 
-	input_set_capability(applespi->poll_dev->input, EV_KEY, BTN_TOOL_FINGER);
-	input_set_capability(applespi->poll_dev->input, EV_KEY, BTN_TOUCH);
-
 	result = input_register_polled_device(applespi->poll_dev);
 	if (result) {
 		pr_info("Unabled to register polled input device (%d)", result);
+		return result;
+	}
+
+	// Now, set up the touchpad as a seperate input device
+	applespi->touchpad_input_dev = devm_input_allocate_device(&spi->dev);
+
+	if (!applespi->touchpad_input_dev)
+		return -ENOMEM;
+
+	applespi->touchpad_input_dev->name = "Apple SPI Touchpad";
+	applespi->touchpad_input_dev->phys = "applespi/input1";
+	applespi->touchpad_input_dev->dev.parent = &spi->dev;
+	applespi->touchpad_input_dev->id.bustype = BUS_SPI;
+
+	applespi->touchpad_input_dev->relbit[0] = BIT_MASK(REL_X) | BIT_MASK(REL_Y);
+
+	__set_bit(EV_KEY, applespi->touchpad_input_dev->evbit);
+	__set_bit(EV_ABS, applespi->touchpad_input_dev->evbit);
+
+	__set_bit(BTN_LEFT, applespi->touchpad_input_dev->keybit);
+
+	__set_bit(INPUT_PROP_POINTER, applespi->touchpad_input_dev->propbit);
+	__set_bit(INPUT_PROP_BUTTONPAD, applespi->touchpad_input_dev->propbit);
+
+	/* finger touch area */
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_TOUCH_MAJOR, 0, 2048, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_TOUCH_MINOR, 0, 2048, 0, 0);
+
+	/* finger approach area */
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_WIDTH_MAJOR, 0, 2048, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_WIDTH_MINOR, 0, 2048, 0, 0);
+
+	/* finger orientation */
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_ORIENTATION, -MAX_FINGER_ORIENTATION, MAX_FINGER_ORIENTATION, 0, 0);
+
+	/* finger position */
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_X, X_MIN, X_MAX, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_Y, Y_MIN, Y_MAX, 0, 0);
+
+	input_set_capability(applespi->touchpad_input_dev, EV_KEY, BTN_TOOL_FINGER);
+	input_set_capability(applespi->touchpad_input_dev, EV_KEY, BTN_TOUCH);
+	input_set_capability(applespi->touchpad_input_dev, EV_KEY, BTN_LEFT);
+
+	input_mt_init_slots(applespi->touchpad_input_dev, MAX_FINGERS,
+		INPUT_MT_POINTER | INPUT_MT_DROP_UNUSED | INPUT_MT_TRACK);
+
+	result = input_register_device(applespi->touchpad_input_dev);
+	if (result) {
+		pr_info("Unabled to register touchpad input device (%d)", result);
 		return result;
 	}
 
