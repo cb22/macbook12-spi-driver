@@ -50,14 +50,14 @@ struct touchpad_protocol {
 
 struct applespi_data {
 	struct spi_device		*spi;
-	struct input_polled_dev	*poll_dev;
+	struct input_polled_dev		*poll_dev;
 
-	u8						*tx_buffer;
-	u8						*rx_buffer;
+	u8				*tx_buffer;
+	u8				*rx_buffer;
 
 	struct mutex			mutex;
 
-	u8						last_keys_pressed[6];
+	u8				last_keys_pressed[6];
 };
 
 static const unsigned char applespi_scancodes[] = {
@@ -398,8 +398,8 @@ MODULE_DEVICE_TABLE(acpi, applespi_acpi_match);
 
 static struct spi_driver applespi_driver = {
 	.driver		= {
-		.name				= "applespi",
-		.owner				= THIS_MODULE,
+		.name			= "applespi",
+		.owner			= THIS_MODULE,
 
 		.acpi_match_table	= ACPI_PTR(applespi_acpi_match),
 	},
