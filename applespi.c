@@ -50,12 +50,12 @@ struct touchpad_protocol {
 
 struct applespi_data {
 	struct spi_device		*spi;
-	struct input_polled_dev *poll_dev;
+	struct input_polled_dev	*poll_dev;
 
 	u8						*tx_buffer;
 	u8						*rx_buffer;
 
-	struct mutex 			mutex;
+	struct mutex			mutex;
 
 	u8						last_keys_pressed[6];
 };
@@ -88,9 +88,9 @@ static const unsigned char applespi_controlcodes[] = {
 
 static irqreturn_t applespi_irq_handler(int irq, void *dev_id)
 {
-   // the actions that the interrupt should perform
-   //pr_info("GOT INTERRUPT");
-   return IRQ_HANDLED;
+	// the actions that the interrupt should perform
+	//pr_info("GOT INTERRUPT");
+	return IRQ_HANDLED;
 }
 
 static ssize_t
@@ -113,22 +113,24 @@ static inline ssize_t
 applespi_sync_write_and_response(struct applespi_data *applespi)
 {
 
-	struct spi_transfer     t1 = {
-		.tx_buf         = applespi->tx_buffer,
-		.len            = APPLESPI_PACKET_SIZE,
-		.cs_change      = 1,
-		.speed_hz   = 400000
+	struct spi_transfer t1 = {
+		.tx_buf			= applespi->tx_buffer,
+		.len			= APPLESPI_PACKET_SIZE,
+		.cs_change		= 1,
+		.speed_hz		= 400000
 	};
-	struct spi_transfer     t2 = {
-		.rx_buf         = applespi->rx_buffer,
-		.len            = 4,
-		.cs_change      = 1,
-		.speed_hz   = 400000
+
+	struct spi_transfer t2 = {
+		.rx_buf			= applespi->rx_buffer,
+		.len			= 4,
+		.cs_change		= 1,
+		.speed_hz		= 400000
 	};
-	struct spi_transfer     t3 = {
-		.rx_buf         = applespi->rx_buffer,
-		.len            = APPLESPI_PACKET_SIZE,
-		.speed_hz   = 400000
+
+	struct spi_transfer t3 = {
+		.rx_buf			= applespi->rx_buffer,
+		.len			= APPLESPI_PACKET_SIZE,
+		.speed_hz		= 400000
 	};
 	struct spi_message      m;
 
@@ -143,10 +145,10 @@ static inline ssize_t
 applespi_sync_read(struct applespi_data *applespi)
 {
 
-	struct spi_transfer     t = {
-		.rx_buf         = applespi->rx_buffer,
-		.len            = APPLESPI_PACKET_SIZE,
-		.speed_hz   = 400000
+	struct spi_transfer t = {
+		.rx_buf			= applespi->rx_buffer,
+		.len			= APPLESPI_PACKET_SIZE,
+		.speed_hz		= 400000
 	};
 	struct spi_message      m;
 
@@ -389,20 +391,20 @@ static int applespi_remove(struct spi_device *spi)
 }
 
 static const struct acpi_device_id applespi_acpi_match[] = {
-        { "APP000D", 0 },
-        { },
+	{ "APP000D", 0 },
+	{ },
 };
 MODULE_DEVICE_TABLE(acpi, applespi_acpi_match);
 
 static struct spi_driver applespi_driver = {
-	.driver = {
-		.name             = "applespi",
-		.owner            = THIS_MODULE,
+	.driver		= {
+		.name				= "applespi",
+		.owner				= THIS_MODULE,
 
-		.acpi_match_table = ACPI_PTR(applespi_acpi_match),
+		.acpi_match_table	= ACPI_PTR(applespi_acpi_match),
 	},
 	.probe		= applespi_probe,
-	.remove     = applespi_remove,
+	.remove		= applespi_remove,
 };
 module_spi_driver(applespi_driver)
 
