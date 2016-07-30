@@ -11,19 +11,24 @@ The 2015 MacBook seems much more complicated, as the DMA controller isn't built 
 What works:
 -----------
 * Basic Typing
+* Driver unloading (no more hanging)
+* Basic touchpad functionality (even right click, handled by libinput)
 
 What doesn't work:
 ------------------
 * Key rollover (properly)
 * FN keys (simple enough)
 * Interrupts
-* The touchpad
-* Driver unloading (occasionally panics)
 * Suspend / resume probably
+* Multitouch (2 finger scrolling, etc)
 
 Interupts:
 ----------
 Currently, how interrupts work are unknown; so this driver will constantly poll the device every few ms. This works, but results in a pretty big battery drain.
+
+Touchpad:
+---------
+The touchpad protocol is the same as the bcm5974 driver. Perhaps there is a nice way of utilizing it? For now, bits of code have just been copy and pasted.
 
 Some useful threads:
 --------------------
