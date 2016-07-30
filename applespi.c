@@ -18,20 +18,16 @@
 #define PACKET_TOUCHPAD         544
 #define PACKET_NOTHING          53312
 
-/* logical signal quality */
-#define SN_PRESSURE	45		/* pressure signal-to-noise ratio */
-#define SN_WIDTH	25		/* width signal-to-noise ratio */
-#define SN_COORD	250		/* coordinate signal-to-noise ratio */
-#define SN_ORIENT	10		/* orientation signal-to-noise ratio */
+#define MAX_ROLLOVER 		6
 
 #define MAX_FINGERS		6
 #define MAX_FINGER_ORIENTATION	16384
 
-#define X_MIN -4828
-#define X_MAX 5345
+#define X_MIN 			-4828
+#define X_MAX 			5345
 
-#define Y_MIN -203
-#define Y_MAX 6803
+#define Y_MIN 			-203
+#define Y_MAX 			6803
 
 struct keyboard_protocol {
 	u16		packet_type;
@@ -61,6 +57,7 @@ struct tp_finger {
 	__le16 unused[2];       /* zeros */
 	__le16 pressure;        /* pressure on forcetouch touchpad */
 	__le16 multi;           /* one finger: varies, more fingers: constant */
+	__le16 padding;
 } __attribute__((packed,aligned(2)));
 
 struct touchpad_protocol {
@@ -76,7 +73,7 @@ struct touchpad_protocol {
 	u8		rel_x;
 	u8		rel_y;
 	u8		unknown4[44];
-	struct tp_finger finger1;
+	struct tp_finger fingers[MAX_FINGERS];
 	u8		unknown5[208];
 };
 
@@ -90,9 +87,9 @@ struct applespi_data {
 
 	struct mutex			mutex;
 
-	u8				last_keys_pressed[6];
-	struct input_mt_pos pos[MAX_FINGERS];
-	int slots[MAX_FINGERS];
+	u8				last_keys_pressed[MAX_ROLLOVER];
+	struct input_mt_pos		pos[MAX_FINGERS];
+	int				slots[MAX_FINGERS];
 };
 
 static const unsigned char applespi_scancodes[] = {
@@ -221,17 +218,13 @@ static void applespi_open(struct input_polled_dev *dev)
 {
 	int i;
 	struct applespi_data *applespi = dev->private;
+	ssize_t items = sizeof(applespi_init_commands) / sizeof(applespi_init_commands[0]);
 
-	pr_info("opened");
-
-	for (i=0; i < 14; i++) {
-//		pr_info("wtfbuf %d", i);
+	for (i=0; i < items; i++) {
 		memcpy(applespi->tx_buffer, applespi_init_commands[i], 256);
 		applespi_sync_write_and_response(applespi);
 //		print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, applespi->rx_buffer, APPLESPI_PACKET_SIZE, false);
 	}
-
-	pr_info("inited");
 }
 
 static void applespi_close(struct input_polled_dev *dev)
@@ -241,8 +234,8 @@ static void applespi_close(struct input_polled_dev *dev)
 
 static void applespi_print_touchpad_frame(struct touchpad_protocol* t)
 {
-	pr_info("Rel X: %d, Rel Y: %d, Pressure 1: %d, abs_x: %d, abs_y: %d", t->rel_x, t->rel_y, t->finger1.pressure, t->finger1.abs_x, t->finger1.abs_y);
-	print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, t, 94, false);
+	pr_info("x 1: %d, x 2: %d, x 3: %d, x 4: %d, x 5: %d, x 6: %d", t->fingers[0].abs_x, t->fingers[1].abs_x, t->fingers[2].abs_x, t->fingers[3].abs_x, t->fingers[4].abs_x, t->fingers[5].abs_x);
+	print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, t, 256, false);
 }
 
 
@@ -282,8 +275,8 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 
 	n = 0;
 
-	for (i = 0; i < 1; i++) {
-		f = &t->finger1;
+	for (i = 0; i < MAX_FINGERS; i++) {
+		f = &t->fingers[i];
 		if (raw2int(f->touch_major) == 0)
 			continue;
 		applespi->pos[n].x = raw2int(f->abs_x);
@@ -296,7 +289,7 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 
 	for (i = 0; i < n; i++)
 		report_finger_data(input, applespi->slots[i],
-				   &applespi->pos[i], &t->finger1);
+				   &applespi->pos[i], &t->fingers[i]);
 
 	input_mt_sync_frame(input);
 	input_report_key(input, BTN_LEFT, t->clicked);

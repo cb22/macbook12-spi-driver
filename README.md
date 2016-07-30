@@ -13,6 +13,7 @@ What works:
 * Basic Typing
 * Driver unloading (no more hanging)
 * Basic touchpad functionality (even right click, handled by libinput)
+* MT touchpad functionality (two finger scroll, probably others)
 
 What doesn't work:
 ------------------
@@ -20,7 +21,6 @@ What doesn't work:
 * FN keys (simple enough)
 * Interrupts
 * Suspend / resume probably
-* Multitouch (2 finger scrolling, etc)
 
 Interupts:
 ----------
