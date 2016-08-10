@@ -1,3 +1,21 @@
+/**
+ * The keyboard and touchpad controller on the MacBook8,1, MacBook9,1 and
+ * MacBookPro12,1 can be driven either by USB or SPI. However the USB pins
+ * are only connected on the MacBookPro12,1, all others need this driver.
+ * The interface is selected using ACPI methods:
+ *
+ * * UIEN ("USB Interface Enable"): If invoked with argument 1, disables SPI
+ *   and enables USB. If invoked with argument 0, disables USB.
+ * * UIST ("USB Interface Status"): Returns 1 if USB is enabled, 0 otherwise.
+ * * SIEN ("SPI Interface Enable"): If invoked with argument 1, disables USB
+ *   and enables SPI. If invoked with argument 0, disables SPI.
+ * * SIST ("SPI Interface Status"): Returns 1 if SPI is enabled, 0 otherwise.
+ * * ISOL: Resets the four GPIO pins used for SPI. Intended to be invoked with
+ *   argument 0, then once more with argument 1.
+ *
+ * UIEN and UIST are only provided on the MacBookPro12,1.
+ */
+
 #define pr_fmt(fmt) "applespi: " fmt
 
 #include <linux/platform_device.h>
