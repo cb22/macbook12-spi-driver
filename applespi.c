@@ -367,9 +367,9 @@ applespi_got_data(struct applespi_data *applespi)
 static void applespi_async_read_complete(void *context)
 {
 	struct applespi_data *applespi = context;
-	pr_info("in spi complete call");
-	print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, applespi->rx_buffer, 256, false);
 	applespi_got_data(applespi);
+
+	acpi_finish_gpe(NULL, 23);
 }
 
 static inline void
@@ -387,20 +387,15 @@ applespi_async_read(struct applespi_data *applespi)
 
 	spi_message_add_tail(&applespi->t, &applespi->m);
 
-	pr_info("in applespi aync read");
 	spi_async(applespi->spi, &applespi->m);
 }
 
-static void applespi_notify(acpi_handle handle, u32 event, void *data)
+static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 {
-	struct applespi_data *applespi = data;
+	struct applespi_data *applespi = context;
 
-	pr_info("applespi notify triggered...");
-//	mdelay(100);
-	pr_info("WTF we just disabled the gpe?!");
-	acpi_status res = acpi_set_gpe(NULL, 23, ACPI_GPE_DISABLE);
-	pr_info("ACPI disable result was: %s", acpi_format_exception(res));
 	applespi_async_read(applespi);
+	return ACPI_INTERRUPT_HANDLED;
 }
 
 static int applespi_probe(struct spi_device *spi)
@@ -514,7 +509,7 @@ static int applespi_probe(struct spi_device *spi)
 	// GPE testing
 	applespi->handle = ACPI_HANDLE(&spi->dev);
 
-	result = acpi_install_notify_handler(applespi->handle, ACPI_SYSTEM_NOTIFY, applespi_notify, applespi);
+	result = acpi_install_gpe_handler(NULL, 23, ACPI_GPE_LEVEL_TRIGGERED, applespi_notify, applespi);
 	pr_info("ACPI install result was: %d", result);
 	if (ACPI_FAILURE(result)) {
 		pr_info("ACPI install result was FAIL: %s", acpi_format_exception(result));
@@ -538,7 +533,7 @@ static int applespi_remove(struct spi_device *spi)
 
 	pr_info("Releasing ACPI");
 	acpi_disable_gpe(NULL, 23);
-	acpi_remove_notify_handler(applespi->handle, ACPI_SYSTEM_NOTIFY, applespi_notify);
+	acpi_remove_gpe_handler(NULL, 23, applespi_notify);
 
 	pr_info("module exit");
 
