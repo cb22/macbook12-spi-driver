@@ -1,4 +1,4 @@
-Very simple, work in progress polled input driver for the SPI keyboard / trackpad found on 12" MacBooks. 
+Very simple, work in progress input driver for the SPI keyboard / trackpad found on 12" MacBooks. 
 
 Using it:
 ---------
@@ -14,17 +14,24 @@ What works:
 * Driver unloading (no more hanging)
 * Basic touchpad functionality (even right click, handled by libinput)
 * MT touchpad functionality (two finger scroll, probably others)
+* Interrupts!
 
 What doesn't work:
 ------------------
 * Key rollover (properly)
 * FN keys (simple enough)
-* Interrupts
-* Suspend / resume probably
+* Suspend / resume
+* Wakeup on keypress / touchpad
+ 
+Known bugs:
+-----------
+* Occasionally, the SPI device can get itself into a state where it causes an interrupt storm. There should be a way of resetting it, or better yet avoiding this state altogether.
+* You shouldn't have to modify your DSDT to get it running.
+* For some reason, doing operations at 8MHz (the speed that the slave device should run at) fail. 400kHz works, but this should be investigated.
 
 Interupts:
 ----------
-Currently, how interrupts work are unknown; so this driver will constantly poll the device every few ms. This works, but results in a pretty big battery drain.
+Interrupts are now working! This means that the driver is no longer polled, and should no longer be a massive battery drain. For more information on how the driver receives interrupts, see the discussion [here](https://github.com/cb22/macbook12-spi-driver/pull/1)
 
 Touchpad:
 ---------
