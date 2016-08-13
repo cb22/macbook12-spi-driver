@@ -11,7 +11,7 @@
  *   and enables SPI. If invoked with argument 0, disables SPI.
  * * SIST ("SPI Interface Status"): Returns 1 if SPI is enabled, 0 otherwise.
  * * ISOL: Resets the four GPIO pins used for SPI. Intended to be invoked with
- *   argument 0, then once more with argument 1.
+ *   argument 1, then once more with argument 0.
  *
  * UIEN and UIST are only provided on the MacBookPro12,1.
  */
@@ -176,7 +176,8 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 {
 	/*
 	The Windows driver always seems to do a 256 byte write, followed
-	by a 4 byte read, followed by a 256 byte read for the real response.
+	by a 4 byte read with CS still the same, followed by a toggling of
+	CS and a 256 byte read for the real response.
 
 	For some reason, weird things happen at the proper speed (8MHz) but
 	everything seems to be OK at 400kHz
