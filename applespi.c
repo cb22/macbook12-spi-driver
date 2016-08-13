@@ -97,17 +97,19 @@ struct touchpad_protocol {
 
 struct applespi_data {
 	struct spi_device		*spi;
-	struct input_polled_dev		*poll_dev;
+	struct input_dev		*keyboard_input_dev;
 	struct input_dev		*touchpad_input_dev;
 
 	u8				*tx_buffer;
 	u8				*rx_buffer;
 
-	struct mutex			mutex;
-
 	u8				last_keys_pressed[MAX_ROLLOVER];
 	struct input_mt_pos		pos[MAX_FINGERS];
 	int				slots[MAX_FINGERS];
+	acpi_handle			handle;
+
+	struct spi_transfer		t;
+	struct spi_message		m;
 };
 
 static const unsigned char applespi_scancodes[] = {
@@ -222,23 +224,18 @@ applespi_sync_read(struct applespi_data *applespi)
 	return applespi_sync(applespi, &m);
 }
 
-
-static void applespi_open(struct input_polled_dev *dev)
+static void applespi_init(struct applespi_data *applespi)
 {
-	int i;
-	struct applespi_data *applespi = dev->private;
+	int i, result;
 	ssize_t items = sizeof(applespi_init_commands) / sizeof(applespi_init_commands[0]);
+
+	// Do a read to flush the trackpad
+	applespi_sync_read(applespi);
 
 	for (i=0; i < items; i++) {
 		memcpy(applespi->tx_buffer, applespi_init_commands[i], 256);
 		applespi_sync_write_and_response(applespi);
-//		print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, applespi->rx_buffer, APPLESPI_PACKET_SIZE, false);
 	}
-}
-
-static void applespi_close(struct input_polled_dev *dev)
-{
-	pr_info("closed");
 }
 
 static void applespi_print_touchpad_frame(struct touchpad_protocol* t)
@@ -316,6 +313,8 @@ applespi_got_data(struct applespi_data *applespi)
 
 	memcpy(&keyboard_protocol, applespi->rx_buffer, APPLESPI_PACKET_SIZE);
 
+//	pr_info("---");
+//	print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, &keyboard_protocol, APPLESPI_PACKET_SIZE, false);
 	if (keyboard_protocol.packet_type == PACKET_NOTHING) {
 		return;
 	} else if (keyboard_protocol.packet_type == PACKET_KEYBOARD) {
@@ -331,26 +330,26 @@ applespi_got_data(struct applespi_data *applespi)
 			}
 
 			if (! still_pressed) {
-				input_report_key(applespi->poll_dev->input, applespi_scancodes[applespi->last_keys_pressed[i]], 0);
+				input_report_key(applespi->keyboard_input_dev, applespi_scancodes[applespi->last_keys_pressed[i]], 0);
 			}
 		}
 
 		for (i=0; i<6; i++) {
 			if (keyboard_protocol.keys_pressed[i] < sizeof(applespi_scancodes) && keyboard_protocol.keys_pressed[i] > 0) {
-				input_report_key(applespi->poll_dev->input, applespi_scancodes[keyboard_protocol.keys_pressed[i]], 1);
+				input_report_key(applespi->keyboard_input_dev, applespi_scancodes[keyboard_protocol.keys_pressed[i]], 1);
 			}
 		}
 
 		// Check control keys
 		for (i=0; i<8; i++) {
 			if (test_bit(i, (long unsigned int *)&keyboard_protocol.modifiers)) {
-				input_report_key(applespi->poll_dev->input, applespi_controlcodes[i], 1);
+				input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 1);
 			} else {
-				input_report_key(applespi->poll_dev->input, applespi_controlcodes[i], 0);
+				input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 0);
 			}
 		}
 
-		input_sync(applespi->poll_dev->input);
+		input_sync(applespi->keyboard_input_dev);
 		memcpy(&applespi->last_keys_pressed, keyboard_protocol.keys_pressed, sizeof(applespi->last_keys_pressed));
 	} else if (keyboard_protocol.packet_type == PACKET_TOUCHPAD) {
 //		pr_info("--- %d", keyboard_protocol.packet_type);
@@ -364,12 +363,43 @@ applespi_got_data(struct applespi_data *applespi)
 
 }
 
-static void applespi_poll(struct input_polled_dev *dev)
+static void applespi_async_read_complete(void *context)
 {
-	struct applespi_data *applespi = dev->private;
-
-	applespi_sync_read(applespi);
+	struct applespi_data *applespi = context;
+	pr_info("in spi complete call");
+	print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, applespi->rx_buffer, 256, false);
 	applespi_got_data(applespi);
+}
+
+static inline void
+applespi_async_read(struct applespi_data *applespi)
+{
+	memset(&applespi->t, 0, sizeof applespi->t);
+
+	applespi->t.rx_buf = applespi->rx_buffer;
+	applespi->t.len = APPLESPI_PACKET_SIZE;
+	applespi->t.speed_hz = 400000;
+
+	spi_message_init(&applespi->m);
+	applespi->m.complete = applespi_async_read_complete;
+	applespi->m.context = applespi;
+
+	spi_message_add_tail(&applespi->t, &applespi->m);
+
+	pr_info("in applespi aync read");
+	spi_async(applespi->spi, &applespi->m);
+}
+
+static void applespi_notify(acpi_handle handle, u32 event, void *data)
+{
+	struct applespi_data *applespi = data;
+
+	pr_info("applespi notify triggered...");
+//	mdelay(100);
+	pr_info("WTF we just disabled the gpe?!");
+	acpi_status res = acpi_set_gpe(NULL, 23, ACPI_GPE_DISABLE);
+	pr_info("ACPI disable result was: %s", acpi_format_exception(res));
+	applespi_async_read(applespi);
 }
 
 static int applespi_probe(struct spi_device *spi)
@@ -384,11 +414,13 @@ static int applespi_probe(struct spi_device *spi)
 
 	/* Initialize the driver data */
 	applespi->spi = spi;
-	mutex_init(&applespi->mutex);
 
 	/* Create our buffers */
 	applespi->tx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE, GFP_KERNEL);
 	applespi->rx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE, GFP_KERNEL);
+
+	if (!applespi->tx_buffer || !applespi->rx_buffer)
+		return -ENOMEM;
 
 	// Store the driver data
 	spi_set_drvdata(spi, applespi);
@@ -397,44 +429,35 @@ static int applespi_probe(struct spi_device *spi)
 	pr_info("acpi spi bpw: %d", spi->bits_per_word);
 	pr_info("acpi spi mode: %d", spi->mode);
 
-	// Setup the poll_dev, which is also the keyboard input
-	applespi->poll_dev = devm_input_allocate_polled_device(&spi->dev);
+	// Setup the keyboard input dev
+	applespi->keyboard_input_dev = devm_input_allocate_device(&spi->dev);
 
-	if (!applespi->poll_dev)
+	if (!applespi->keyboard_input_dev)
 		return -ENOMEM;
 
-	applespi->poll_dev->private = applespi;
-	applespi->poll_dev->poll_interval = 1;
-	applespi->poll_dev->poll_interval_min = 1;
-	applespi->poll_dev->poll_interval_max = 1;
+	applespi->keyboard_input_dev->name = "Apple SPI Keyboard";
+	applespi->keyboard_input_dev->phys = "applespi/input0";
+	applespi->keyboard_input_dev->dev.parent = &spi->dev;
+	applespi->keyboard_input_dev->id.bustype = BUS_SPI;
 
-	applespi->poll_dev->open = applespi_open;
-	applespi->poll_dev->close = applespi_close;
-	applespi->poll_dev->poll = applespi_poll;
-
-	applespi->poll_dev->input->name = "Apple SPI Keyboard";
-	applespi->poll_dev->input->phys = "applespi/input0";
-	applespi->poll_dev->input->dev.parent = &spi->dev;
-	applespi->poll_dev->input->id.bustype = BUS_SPI;
-
-	applespi->poll_dev->input->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_LED) | BIT_MASK(EV_REP);
-	applespi->poll_dev->input->ledbit[0] = BIT_MASK(LED_CAPSL);
+	applespi->keyboard_input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_LED) | BIT_MASK(EV_REP);
+	applespi->keyboard_input_dev->ledbit[0] = BIT_MASK(LED_CAPSL);
 
 	for (i = 0; i<sizeof(applespi_scancodes); i++) {
 		if (applespi_scancodes[i]) {
-			input_set_capability(applespi->poll_dev->input, EV_KEY, applespi_scancodes[i]);
+			input_set_capability(applespi->keyboard_input_dev, EV_KEY, applespi_scancodes[i]);
 		}
 	}
 
 	for (i = 0; i<sizeof(applespi_controlcodes); i++) {
 		if (applespi_controlcodes[i]) {
-			input_set_capability(applespi->poll_dev->input, EV_KEY, applespi_controlcodes[i]);
+			input_set_capability(applespi->keyboard_input_dev, EV_KEY, applespi_controlcodes[i]);
 		}
 	}
 
-	result = input_register_polled_device(applespi->poll_dev);
+	result = input_register_device(applespi->keyboard_input_dev);
 	if (result) {
-		pr_info("Unabled to register polled input device (%d)", result);
+		pr_info("Unabled to register keyboard input device (%d)", result);
 		return result;
 	}
 
@@ -487,7 +510,23 @@ static int applespi_probe(struct spi_device *spi)
 		return result;
 	}
 
+	// GPE testing
+	applespi->handle = ACPI_HANDLE(&spi->dev);
+
+	result = acpi_install_notify_handler(applespi->handle, ACPI_SYSTEM_NOTIFY, applespi_notify, applespi);
+	pr_info("ACPI install result was: %d", result);
+	if (ACPI_FAILURE(result)) {
+		pr_info("ACPI install result was FAIL: %s", acpi_format_exception(result));
+	}
+
+	result = acpi_enable_gpe(NULL, 23);
+	pr_info("ACPI enable GPE result was: %d", result);
+	if (ACPI_FAILURE(result)) {
+		pr_info("ACPI enable GPE result was: %s", acpi_format_exception(result));
+	}
+
 	pr_info("module probe done");
+	applespi_init(applespi);
 
 	return 0;
 }
@@ -496,12 +535,9 @@ static int applespi_remove(struct spi_device *spi)
 {
 	struct applespi_data *applespi = spi_get_drvdata(spi);
 
-	mutex_lock(&applespi->mutex);
-
-	pr_info("freeing irq");
-	free_irq(spi->irq, applespi);
-
-	mutex_unlock(&applespi->mutex);
+	pr_info("Releasing ACPI");
+	acpi_disable_gpe(NULL, 23);
+	acpi_remove_notify_handler(applespi->handle, ACPI_SYSTEM_NOTIFY, applespi_notify);
 
 	pr_info("module exit");
 
