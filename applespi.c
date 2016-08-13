@@ -79,20 +79,20 @@ struct tp_finger {
 } __attribute__((packed,aligned(2)));
 
 struct touchpad_protocol {
-	u16		packet_type;
-	u8		unknown1[4];
-	u8		number_of_fingers;
-	u8		unknown2[4];
-	u8		counter;
-	u8		unknown3[2];
-	u8		number_of_fingers2;
-	u8		unknown[2];
-	u8		clicked;
-	u8		rel_x;
-	u8		rel_y;
-	u8		unknown4[44];
-	struct tp_finger fingers[MAX_FINGERS];
-	u8		unknown5[208];
+	u16			packet_type;
+	u8			unknown1[4];
+	u8			number_of_fingers;
+	u8			unknown2[4];
+	u8			counter;
+	u8			unknown3[2];
+	u8			number_of_fingers2;
+	u8			unknown[2];
+	u8			clicked;
+	u8			rel_x;
+	u8			rel_y;
+	u8			unknown4[44];
+	struct tp_finger	fingers[MAX_FINGERS];
+	u8			unknown5[208];
 };
 
 struct applespi_data {
@@ -218,7 +218,6 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 static inline ssize_t
 applespi_sync_read(struct applespi_data *applespi)
 {
-
 	struct spi_transfer t = {
 		.rx_buf			= applespi->rx_buffer,
 		.len			= APPLESPI_PACKET_SIZE,
