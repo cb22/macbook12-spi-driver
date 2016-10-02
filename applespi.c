@@ -108,6 +108,8 @@ struct applespi_data {
 	int				slots[MAX_FINGERS];
 	acpi_handle			handle;
 	int				gpe;
+	acpi_handle			sien;
+	acpi_handle			sist;
 
 	struct spi_transfer		t;
 	struct spi_message		m;
@@ -211,6 +213,34 @@ applespi_sync_read(struct applespi_data *applespi)
 	spi_message_init(&m);
 	spi_message_add_tail(&t, &m);
 	return applespi_sync(applespi, &m);
+}
+
+static int applespi_enable_spi(struct applespi_data *applespi)
+{
+	int result;
+	long long unsigned int spi_status;
+
+	/* Check if SPI is already enabled, so we can skip the delay below */
+	result = acpi_evaluate_integer(applespi->sist, NULL, NULL, &spi_status);
+	if (ACPI_SUCCESS(result) && spi_status)
+		return 0;
+
+	/* SIEN(1) will enable SPI communication */
+	result = acpi_execute_simple_method(applespi->sien, NULL, 1);
+	if (ACPI_FAILURE(result)) {
+		pr_err("SIEN failed: %s", acpi_format_exception(result));
+		return -ENODEV;
+	}
+
+	/*
+	 * Allow the SPI interface to come up before returning. Without this
+	 * delay, the SPI commands to enable multitouch mode may not reach
+	 * the trackpad controller, causing pointer movement to break upon
+	 * resume from sleep.
+	 */
+	msleep(50);
+
+	return 0;
 }
 
 static void applespi_init(struct applespi_data *applespi)
@@ -381,7 +411,7 @@ static int applespi_probe(struct spi_device *spi)
 {
 	struct applespi_data *applespi;
 	int result, i;
-	long long unsigned int gpe;
+	long long unsigned int gpe, usb_status;
 
 	/* Allocate driver data */
 	applespi = devm_kzalloc(&spi->dev, sizeof(*applespi), GFP_KERNEL);
@@ -477,6 +507,28 @@ static int applespi_probe(struct spi_device *spi)
 		return -ENODEV;
 	}
 
+	applespi->handle = ACPI_HANDLE(&spi->dev);
+
+	/* Check if the USB interface is present and enabled already */
+	result = acpi_evaluate_integer(applespi->handle, "UIST", NULL, &usb_status);
+	if (ACPI_SUCCESS(result) && usb_status) {
+		/* Let the USB driver take over instead */
+		pr_info("USB interface already enabled");
+		return -ENODEV;
+	}
+
+	/* Cache ACPI method handles */
+	if (ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIEN", &applespi->sien)) ||
+	    ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIST", &applespi->sist))) {
+		pr_err("Failed to get required ACPI method handle");
+		return -ENODEV;
+	}
+
+	/* Switch on the SPI interface */
+	result = applespi_enable_spi(applespi);
+	if (result)
+		return result;
+
 	/* Switch the touchpad into multitouch mode */
 	applespi_init(applespi);
 
@@ -484,8 +536,6 @@ static int applespi_probe(struct spi_device *spi)
 	 * The applespi device doesn't send interrupts normally (as is described
 	 * in its DSDT), but rather seems to use ACPI GPEs.
 	 */
-	applespi->handle = ACPI_HANDLE(&spi->dev);
-
 	result = acpi_evaluate_integer(applespi->handle, "_GPE", NULL, &gpe);
 	if (ACPI_FAILURE(result)) {
 		pr_err("Failed to obtain GPE for SPI slave device: %s", acpi_format_exception(result));
@@ -522,11 +572,38 @@ static int applespi_remove(struct spi_device *spi)
 	return 0;
 }
 
+#ifdef CONFIG_PM
+static int applespi_suspend(struct device *dev)
+{
+	pr_info("device suspend done.");
+	return 0;
+}
+
+static int applespi_resume(struct device *dev)
+{
+	struct spi_device *spi = to_spi_device(dev);
+	struct applespi_data *applespi = spi_get_drvdata(spi);
+
+	/* Switch on the SPI interface */
+	applespi_enable_spi(applespi);
+
+	/* Switch the touchpad into multitouch mode */
+	applespi_init(applespi);
+
+	pr_info("device resume done.");
+
+	return 0;
+}
+#endif
+
 static const struct acpi_device_id applespi_acpi_match[] = {
 	{ "APP000D", 0 },
 	{ },
 };
 MODULE_DEVICE_TABLE(acpi, applespi_acpi_match);
+
+static UNIVERSAL_DEV_PM_OPS(applespi_pm_ops, applespi_suspend,
+                            applespi_resume, NULL);
 
 static struct spi_driver applespi_driver = {
 	.driver		= {
@@ -534,6 +611,7 @@ static struct spi_driver applespi_driver = {
 		.owner			= THIS_MODULE,
 
 		.acpi_match_table	= ACPI_PTR(applespi_acpi_match),
+		.pm			= &applespi_pm_ops,
 	},
 	.probe		= applespi_probe,
 	.remove		= applespi_remove,

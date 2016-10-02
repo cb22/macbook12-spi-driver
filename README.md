@@ -15,12 +15,12 @@ What works:
 * Basic touchpad functionality (even right click, handled by libinput)
 * MT touchpad functionality (two finger scroll, probably others)
 * Interrupts!
+* Suspend / resume
 
 What doesn't work:
 ------------------
 * Key rollover (properly)
 * FN keys (simple enough)
-* Suspend / resume
 * Wakeup on keypress / touchpad
  
 Known bugs:
