@@ -246,7 +246,7 @@ static int applespi_enable_spi(struct applespi_data *applespi)
 static void applespi_init(struct applespi_data *applespi)
 {
 	int i;
-	ssize_t items = sizeof(applespi_init_commands) / sizeof(applespi_init_commands[0]);
+	ssize_t items = ARRAY_SIZE(applespi_init_commands);
 
 	// Do a read to flush the trackpad
 	applespi_sync_read(applespi);
@@ -343,7 +343,7 @@ applespi_got_data(struct applespi_data *applespi)
 		}
 
 		for (i=0; i<6; i++) {
-			if (keyboard_protocol.keys_pressed[i] < sizeof(applespi_scancodes) && keyboard_protocol.keys_pressed[i] > 0) {
+			if (keyboard_protocol.keys_pressed[i] < ARRAY_SIZE(applespi_scancodes) && keyboard_protocol.keys_pressed[i] > 0) {
 				input_report_key(applespi->keyboard_input_dev, applespi_scancodes[keyboard_protocol.keys_pressed[i]], 1);
 			}
 		}
@@ -444,11 +444,11 @@ static int applespi_probe(struct spi_device *spi)
 	applespi->keyboard_input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_LED) | BIT_MASK(EV_REP);
 	applespi->keyboard_input_dev->ledbit[0] = BIT_MASK(LED_CAPSL);
 
-	for (i = 0; i<sizeof(applespi_scancodes); i++)
+	for (i = 0; i<ARRAY_SIZE(applespi_scancodes); i++)
 		if (applespi_scancodes[i])
 			input_set_capability(applespi->keyboard_input_dev, EV_KEY, applespi_scancodes[i]);
 
-	for (i = 0; i<sizeof(applespi_controlcodes); i++)
+	for (i = 0; i<ARRAY_SIZE(applespi_controlcodes); i++)
 		if (applespi_controlcodes[i])
 			input_set_capability(applespi->keyboard_input_dev, EV_KEY, applespi_controlcodes[i]);
 
