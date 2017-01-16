@@ -104,6 +104,8 @@ struct applespi_data {
 	u8				*rx_buffer;
 
 	u8				last_keys_pressed[MAX_ROLLOVER];
+	u8				last_keys_fn_pressed[MAX_ROLLOVER];
+	u8				last_fn_pressed;
 	struct input_mt_pos		pos[MAX_FINGERS];
 	int				slots[MAX_FINGERS];
 	acpi_handle			handle;
@@ -139,6 +141,32 @@ static const unsigned char applespi_controlcodes[] = {
 	KEY_RIGHTSHIFT,
 	KEY_RIGHTALT,
 	KEY_RIGHTMETA
+};
+
+struct applespi_key_translation {
+	u8  from;
+	u16 to;
+};
+
+static const struct applespi_key_translation applespi_fn_codes[] = {
+	{ 42,  KEY_DELETE },
+	{ 40,  KEY_INSERT },
+	{ 58,  KEY_BRIGHTNESSDOWN },
+	{ 59,  KEY_BRIGHTNESSUP },
+	{ 60,  KEY_SCALE },
+	{ 61,  KEY_DASHBOARD },
+	{ 62,  KEY_KBDILLUMDOWN },
+	{ 63,  KEY_KBDILLUMUP },
+	{ 64,  KEY_PREVIOUSSONG },
+	{ 65,  KEY_PLAYPAUSE },
+	{ 66,  KEY_NEXTSONG },
+	{ 67,  KEY_MUTE },
+	{ 68,  KEY_VOLUMEDOWN },
+	{ 69,  KEY_VOLUMEUP },
+	{ 82,  KEY_PAGEUP },
+	{ 81,  KEY_PAGEDOWN },
+	{ 80,  KEY_HOME },
+	{ 79,  KEY_END },
 };
 
 u8 *applespi_init_commands[] = {
@@ -317,11 +345,28 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 	return 0;
 }
 
+static unsigned int
+applespi_code_to_key(u8 code, int fn_pressed)
+{
+	int i;
+
+	if (fn_pressed) {
+		for (i=0; i<ARRAY_SIZE(applespi_fn_codes); i++) {
+			if (applespi_fn_codes[i].from == code) {
+				return applespi_fn_codes[i].to;
+			}
+		}
+	}
+
+	return applespi_scancodes[code];
+}
+
 static void
 applespi_got_data(struct applespi_data *applespi)
 {
 	struct keyboard_protocol keyboard_protocol;
 	int i, j;
+	unsigned int key;
 	bool still_pressed;
 
 	memcpy(&keyboard_protocol, applespi->rx_buffer, APPLESPI_PACKET_SIZE);
@@ -338,13 +383,17 @@ applespi_got_data(struct applespi_data *applespi)
 			}
 
 			if (! still_pressed) {
-				input_report_key(applespi->keyboard_input_dev, applespi_scancodes[applespi->last_keys_pressed[i]], 0);
+				key = applespi_code_to_key(applespi->last_keys_pressed[i], applespi->last_keys_fn_pressed[i]);
+				input_report_key(applespi->keyboard_input_dev, key, 0);
+				applespi->last_keys_fn_pressed[i] = 0;
 			}
 		}
 
 		for (i=0; i<6; i++) {
 			if (keyboard_protocol.keys_pressed[i] < ARRAY_SIZE(applespi_scancodes) && keyboard_protocol.keys_pressed[i] > 0) {
-				input_report_key(applespi->keyboard_input_dev, applespi_scancodes[keyboard_protocol.keys_pressed[i]], 1);
+				key = applespi_code_to_key(keyboard_protocol.keys_pressed[i], keyboard_protocol.fn_pressed);
+				input_report_key(applespi->keyboard_input_dev, key, 1);
+				applespi->last_keys_fn_pressed[i] = keyboard_protocol.fn_pressed;
 			}
 		}
 
@@ -356,6 +405,14 @@ applespi_got_data(struct applespi_data *applespi)
 				input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 0);
 			}
 		}
+
+		// Check function key
+		if (keyboard_protocol.fn_pressed && !applespi->last_fn_pressed) {
+			input_report_key(applespi->keyboard_input_dev, KEY_FN, 1);
+		} else if (!keyboard_protocol.fn_pressed && applespi->last_fn_pressed) {
+			input_report_key(applespi->keyboard_input_dev, KEY_FN, 0);
+		}
+		applespi->last_fn_pressed = keyboard_protocol.fn_pressed;
 
 		input_sync(applespi->keyboard_input_dev);
 		memcpy(&applespi->last_keys_pressed, keyboard_protocol.keys_pressed, sizeof(applespi->last_keys_pressed));
@@ -451,6 +508,12 @@ static int applespi_probe(struct spi_device *spi)
 	for (i = 0; i<ARRAY_SIZE(applespi_controlcodes); i++)
 		if (applespi_controlcodes[i])
 			input_set_capability(applespi->keyboard_input_dev, EV_KEY, applespi_controlcodes[i]);
+
+	for (i = 0; i<ARRAY_SIZE(applespi_fn_codes); i++)
+		if (applespi_fn_codes[i].to)
+			input_set_capability(applespi->keyboard_input_dev, EV_KEY, applespi_fn_codes[i].to);
+
+	input_set_capability(applespi->keyboard_input_dev, EV_KEY, KEY_FN);
 
 	result = input_register_device(applespi->keyboard_input_dev);
 	if (result) {

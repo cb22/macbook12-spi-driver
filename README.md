@@ -11,6 +11,7 @@ The 2015 MacBook seems much more complicated, as the DMA controller isn't built 
 What works:
 -----------
 * Basic Typing
+* FN keys
 * Driver unloading (no more hanging)
 * Basic touchpad functionality (even right click, handled by libinput)
 * MT touchpad functionality (two finger scroll, probably others)
@@ -20,7 +21,6 @@ What works:
 What doesn't work:
 ------------------
 * Key rollover (properly)
-* FN keys (simple enough)
 * Wakeup on keypress / touchpad
  
 Known bugs:
