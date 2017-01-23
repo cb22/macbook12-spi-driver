@@ -25,6 +25,7 @@
 #include <linux/interrupt.h>
 #include <linux/property.h>
 #include <linux/delay.h>
+#include <linux/dmi.h>
 
 #include <linux/input.h>
 #include <linux/input/mt.h>
@@ -40,12 +41,6 @@
 
 #define MAX_FINGERS		6
 #define MAX_FINGER_ORIENTATION	16384
-
-#define X_MIN 			-4828
-#define X_MAX 			5345
-
-#define Y_MIN 			-203
-#define Y_MAX 			6803
 
 struct keyboard_protocol {
 	u16		packet_type;
@@ -95,6 +90,13 @@ struct touchpad_protocol {
 	u8			unknown5[208];
 };
 
+struct applespi_tp_info {
+	int	x_min;
+	int	x_max;
+	int	y_min;
+	int	y_max;
+};
+
 struct applespi_data {
 	struct spi_device		*spi;
 	struct input_dev		*keyboard_input_dev;
@@ -102,6 +104,8 @@ struct applespi_data {
 
 	u8				*tx_buffer;
 	u8				*rx_buffer;
+
+	const struct applespi_tp_info	*tp_info;
 
 	u8				last_keys_pressed[MAX_ROLLOVER];
 	u8				last_keys_fn_pressed[MAX_ROLLOVER];
@@ -167,6 +171,45 @@ static const struct applespi_key_translation applespi_fn_codes[] = {
 	{ 81,  KEY_PAGEDOWN },
 	{ 80,  KEY_HOME },
 	{ 79,  KEY_END },
+};
+
+static struct applespi_tp_info applespi_macbookpro131_info = { -6243, 6749, -1085, 6770 };
+static struct applespi_tp_info applespi_macbookpro133_info = { -7456, 7976, -163, 9283 };
+// MacBook11, MacBook12
+static struct applespi_tp_info applespi_default_info = { -4828, 5345, -203, 6803 };
+
+static const struct dmi_system_id applespi_touchpad_infos[] = {
+	{
+		.ident = "Apple MacBookPro13,1",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro13,1")
+		},
+		.driver_data = &applespi_macbookpro131_info,
+	},
+	{
+		.ident = "Apple MacBookPro13,2",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro13,2")
+		},
+		.driver_data = &applespi_macbookpro131_info,	// same touchpad
+	},
+	{
+		.ident = "Apple MacBookPro13,3",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro13,3")
+		},
+		.driver_data = &applespi_macbookpro133_info,
+	},
+	{
+		.ident = "Apple Generic MacBook(Pro)",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+		},
+		.driver_data = &applespi_default_info,
+	},
 };
 
 u8 *applespi_init_commands[] = {
@@ -319,6 +362,7 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 {
 	const struct tp_finger *f;
 	struct input_dev *input = applespi->touchpad_input_dev;
+	const struct applespi_tp_info *tp_info = applespi->tp_info;
 	int i, n;
 
 	n = 0;
@@ -328,7 +372,7 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 		if (raw2int(f->touch_major) == 0)
 			continue;
 		applespi->pos[n].x = raw2int(f->abs_x);
-		applespi->pos[n].y = Y_MIN + Y_MAX - raw2int(f->abs_y);
+		applespi->pos[n].y = tp_info->y_min + tp_info->y_max - raw2int(f->abs_y);
 		n++;
 	}
 
@@ -487,6 +531,9 @@ static int applespi_probe(struct spi_device *spi)
 	/* Store the driver data */
 	spi_set_drvdata(spi, applespi);
 
+	/* Set up touchpad dimensions */
+	applespi->tp_info = dmi_first_match(applespi_touchpad_infos)->driver_data;
+
 	/* Setup the keyboard input dev */
 	applespi->keyboard_input_dev = devm_input_allocate_device(&spi->dev);
 
@@ -554,8 +601,8 @@ static int applespi_probe(struct spi_device *spi)
 	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_ORIENTATION, -MAX_FINGER_ORIENTATION, MAX_FINGER_ORIENTATION, 0, 0);
 
 	/* finger position */
-	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_X, X_MIN, X_MAX, 0, 0);
-	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_Y, Y_MIN, Y_MAX, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_X, applespi->tp_info->x_min, applespi->tp_info->x_max, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_Y, applespi->tp_info->y_min, applespi->tp_info->y_max, 0, 0);
 
 	input_set_capability(applespi->touchpad_input_dev, EV_KEY, BTN_TOOL_FINGER);
 	input_set_capability(applespi->touchpad_input_dev, EV_KEY, BTN_TOUCH);
