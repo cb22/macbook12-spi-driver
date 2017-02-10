@@ -1,4 +1,5 @@
 obj-m += applespi.o
+obj-m += appletb.o
 
 KVERSION := $(KERNELRELEASE)
 ifeq ($(origin KERNELRELEASE), undefined)
