@@ -569,7 +569,153 @@ static struct hid_driver appletb_driver = {
 	.resume = appletb_resume,
 #endif
 };
+
+#ifdef WE_ARE_IN_HID_IGNORE_LIST
 module_hid_driver(appletb_driver);
+
+#else /* WE_ARE_IN_HID_IGNORE_LIST */
+/*
+ * Horrible hack to work around the fact that it's not possible to dynamically
+ * be added to hid-core's hid_ignore_list. This means the hid-generic will hid
+ * driver always get attached to the touchbar device. This workaround attempts
+ * to detect that, release the driver, and trigger our driver instead.
+ */
+
+static struct {
+	struct delayed_work  work;
+	struct usb_interface *intf;
+	ktime_t start;
+} appletb_usb_hack_check_data;
+
+static void appletb_usb_hack_release_hid_dev(struct hid_device *hdev)
+{
+        struct device *dev = get_device(&hdev->dev);
+
+	if (dev->parent)
+		device_lock(dev->parent);
+	device_release_driver(dev);
+	if (dev->parent)
+		device_unlock(dev->parent);
+
+        put_device(dev);
+}
+
+static void appletb_usb_hack_check_hid_driver(struct work_struct *work)
+{
+	struct usb_interface *intf;
+	struct hid_device *hid;
+	s64 wait_time;
+	int rc;
+
+	/* check if we're still active */
+	intf = usb_get_intf(appletb_usb_hack_check_data.intf);
+	if (!intf)
+		return;
+
+	wait_time = ktime_ms_delta(ktime_get(), appletb_usb_hack_check_data.start);
+
+	/* get associated hid device */
+	hid = usb_get_intfdata(intf);
+
+	/* wait up to 3s for hid dev and driver to get attached */
+	if ((!hid || !hid->driver) && wait_time < 3000) {
+		/* try again */
+		schedule_delayed_work(&appletb_usb_hack_check_data.work,
+				      msecs_to_jiffies(50));
+		goto done;
+	}
+
+	if (!hid || !hid->driver) {
+		pr_warn("No hid driver attached to touchbar in 3s - giving up");
+		goto all_done;
+	}
+
+	/* check if we got attached */
+	if (strcmp(hid->driver->name, appletb_driver.name) == 0)
+		goto all_done;
+
+	/* else normally expect hid-generic to be the one attached */
+	if (strcmp(hid->driver->name, "hid-generic") != 0) {
+		pr_warn("Unexpected hid driver '%s' attached to touchbar",
+			hid->driver->name);
+	}
+
+	/* detach current driver, and re-register ourselves in order to
+	 * trigger attachment. */
+	pr_info("releasing current hid driver '%s'\n", hid->driver->name);
+	appletb_usb_hack_release_hid_dev(hid);
+
+	hid_unregister_driver(&appletb_driver);
+	rc = hid_register_driver(&appletb_driver);
+	if (rc)
+		pr_err("Error (re)registering touchbar hid driver (%d)", rc);
+
+ all_done:
+	appletb_usb_hack_check_data.intf = NULL;
+ done:
+	usb_put_intf(intf);
+}
+
+static int appletb_usb_hack_probe(struct usb_interface *intf,
+				  const struct usb_device_id *id)
+{
+	struct usb_device *udev;
+
+	udev = interface_to_usbdev(intf);
+	intf = usb_ifnum_to_if(udev, 2);
+
+	if (intf && intf != appletb_usb_hack_check_data.intf) {
+		appletb_usb_hack_check_data.intf = intf;
+		appletb_usb_hack_check_data.start = ktime_get();
+		schedule_delayed_work(&appletb_usb_hack_check_data.work,
+				      msecs_to_jiffies(50));
+        }
+
+	return -ENODEV;
+}
+
+static void appletb_usb_hack_disconnect(struct usb_interface *intf)
+{
+	cancel_delayed_work_sync(&appletb_usb_hack_check_data.work);
+	appletb_usb_hack_check_data.intf = NULL;
+}
+
+static int appletb_usb_hack_register(struct usb_driver *drv)
+{
+	int rc;
+
+	INIT_DELAYED_WORK(&appletb_usb_hack_check_data.work,
+			  appletb_usb_hack_check_hid_driver);
+
+	rc = hid_register_driver(&appletb_driver);
+	if (rc)
+		return rc;
+
+	return usb_register(drv);
+}
+
+static void appletb_usb_hack_unregister(struct usb_driver *drv)
+{
+	usb_deregister(drv);
+	hid_unregister_driver(&appletb_driver);
+}
+
+static const struct usb_device_id appletb_usb_hack_devices[] = {
+	{ USB_DEVICE(USB_ID_VENDOR_APPLE, USB_ID_PRODUCT_IBRIDGE) },
+	{ },
+};
+MODULE_DEVICE_TABLE(usb, appletb_usb_hack_devices);
+
+static struct usb_driver appletb_usb_hack_driver = {
+	.name = "apple-touchbar-usb-hack",
+	.probe = appletb_usb_hack_probe,
+	.disconnect = appletb_usb_hack_disconnect,
+	.id_table = appletb_usb_hack_devices,
+};
+
+module_driver(appletb_usb_hack_driver, appletb_usb_hack_register,
+	      appletb_usb_hack_unregister);
+#endif /* WE_ARE_IN_HID_IGNORE_LIST */
 
 MODULE_AUTHOR("Ronald Tschalär");
 MODULE_DESCRIPTION("MacBookPro touchbar driver");
