@@ -1,4 +1,4 @@
-Very simple, work in progress input driver for the SPI keyboard / trackpad found on 12" MacBooks (2015 and later) and newer MacBook Pros (late 2016 and later).
+Very simple, work in progress input driver for the SPI keyboard / trackpad found on 12" MacBooks (2015 and later) and newer MacBook Pros (late 2016 and later), as well a simple touchbar driver for 2016 MacBook Pro's.
 
 Using it:
 ---------
@@ -18,7 +18,7 @@ As root, do the following (all MacBook's and MacBook Pro's except MacBook8,1 (20
 echo -e "\n# applespi\napplespi\nspi_pxa2xx_platform\nintel_lpss_pci" >> /etc/initramfs-tools/modules
 
 apt install dkms
-git clone https://github.com/cb22/macbook12-spi-driver.git /usr/src/applespi-0.1
+git clone https://github.com/roadrunner2/macbook12-spi-driver.git /usr/src/applespi-0.1
 dkms install -m applespi -v 0.1
 ```
 
@@ -66,6 +66,10 @@ Some useful values are (since the value is a bitmask, these can be combined):
 * 0x10000 - determine touchpad values range
 * 0x1     - turn on logging of touchpad initialization packets
 * 0x6     - turn on logging of backlight and caps-lock-led packets
+
+Touchbar:
+---------
+The touchbar driver is called `appletb`. It provides basic functionality, enabling the touchbar and switching between modes based on the FN key. Furthermore the touchbar is automatically switched off if no (internal) keyboard, touchpad, or touchbar input is received for 60 seconds; any (internal) keyboard or touchpad input switches it back on.
 
 Some useful threads:
 --------------------
