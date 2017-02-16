@@ -25,8 +25,7 @@
 #define USB_ID_VENDOR_APPLE	0x05ac
 #define USB_ID_PRODUCT_IBRIDGE	0x8600
 
-#define MAX_TB_KEYS 		13	/* ESC, F1-F12 */
-#define MAX_KEY_QUEUE		50
+#define MAX_TB_KEYS		13	/* ESC, F1-F12 */
 
 #define APPLETB_CMD_MODE_ESC	0
 #define APPLETB_CMD_MODE_FN	1
@@ -163,11 +162,10 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	struct appletb_data *tb_data =
 		container_of(work, struct appletb_data, tb_mode_work.work);
 	s64 time_left;
-	unsigned long flags;
 	unsigned char pending_mode;
 	bool any_tb_key_pressed;
 
-	spin_lock_irqsave(&tb_data->tb_mode_lock, flags);
+	spin_lock(&tb_data->tb_mode_lock);
 
 	time_left = appletb_tb_idle_timeout -
 		ktime_ms_delta(ktime_get(), tb_data->last_event_time) / 1000;
@@ -177,7 +175,7 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 
 	any_tb_key_pressed = appletb_any_tb_key_pressed(tb_data);
 
-	spin_unlock_irqrestore(&tb_data->tb_mode_lock, flags);
+	spin_unlock(&tb_data->tb_mode_lock);
 
 	if (pending_mode != APPLETB_CMD_MODE_NONE) {
 		/* explicit mode-change requested */
@@ -491,19 +489,19 @@ static int appletb_probe(struct hid_device *hdev, const struct hid_device_id *id
 		      msecs_to_jiffies(appletb_tb_idle_timeout * 1000));
 
 	/* Set up the hid */
-        hid_set_drvdata(hdev, tb_data);
+	hid_set_drvdata(hdev, tb_data);
 
-        rc = hid_parse(hdev);
-        if (rc) {
-                hid_err(hdev, "hid parse failed (%d)\n", rc);
-                goto cancel_work;
-        }
+	rc = hid_parse(hdev);
+	if (rc) {
+		hid_err(hdev, "hid parse failed (%d)\n", rc);
+		goto cancel_work;
+	}
 
 	rc = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
-        if (rc) {
-                hid_err(hdev, "hw start failed (%d)\n", rc);
-                goto cancel_work;
-        }
+	if (rc) {
+		hid_err(hdev, "hw start failed (%d)\n", rc);
+		goto cancel_work;
+	}
 
 	/* done */
 	hid_info(hdev, "module probe done.\n");
@@ -581,6 +579,8 @@ module_hid_driver(appletb_driver);
  * to detect that, release the driver, and trigger our driver instead.
  */
 
+#define APPLETB_TB_SIMPLE_IFNUM 2
+
 static struct {
 	struct delayed_work  work;
 	struct usb_interface *intf;
@@ -589,7 +589,7 @@ static struct {
 
 static void appletb_usb_hack_release_hid_dev(struct hid_device *hdev)
 {
-        struct device *dev = get_device(&hdev->dev);
+	struct device *dev = get_device(&hdev->dev);
 
 	if (dev->parent)
 		device_lock(dev->parent);
@@ -597,7 +597,7 @@ static void appletb_usb_hack_release_hid_dev(struct hid_device *hdev)
 	if (dev->parent)
 		device_unlock(dev->parent);
 
-        put_device(dev);
+	put_device(dev);
 }
 
 static void appletb_usb_hack_check_hid_driver(struct work_struct *work)
@@ -662,14 +662,14 @@ static int appletb_usb_hack_probe(struct usb_interface *intf,
 	struct usb_device *udev;
 
 	udev = interface_to_usbdev(intf);
-	intf = usb_ifnum_to_if(udev, 2);
+	intf = usb_ifnum_to_if(udev, APPLETB_TB_SIMPLE_IFNUM);
 
 	if (intf && intf != appletb_usb_hack_check_data.intf) {
 		appletb_usb_hack_check_data.intf = intf;
 		appletb_usb_hack_check_data.start = ktime_get();
 		schedule_delayed_work(&appletb_usb_hack_check_data.work,
 				      msecs_to_jiffies(50));
-        }
+	}
 
 	return -ENODEV;
 }
