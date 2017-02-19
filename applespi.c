@@ -1297,13 +1297,8 @@ static int applespi_probe(struct spi_device *spi)
 	applespi->touchpad_input_dev->dev.parent = &spi->dev;
 	applespi->touchpad_input_dev->id.bustype = BUS_SPI;
 
-	applespi->touchpad_input_dev->relbit[0] =
-					BIT_MASK(REL_X) | BIT_MASK(REL_Y);
-
-	__set_bit(EV_KEY, applespi->touchpad_input_dev->evbit);
-	__set_bit(EV_ABS, applespi->touchpad_input_dev->evbit);
-
-	__set_bit(BTN_LEFT, applespi->touchpad_input_dev->keybit);
+	input_set_capability(applespi->touchpad_input_dev, EV_REL, REL_X);
+	input_set_capability(applespi->touchpad_input_dev, EV_REL, REL_Y);
 
 	__set_bit(INPUT_PROP_POINTER, applespi->touchpad_input_dev->propbit);
 	__set_bit(INPUT_PROP_BUTTONPAD, applespi->touchpad_input_dev->propbit);
