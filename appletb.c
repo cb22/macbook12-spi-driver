@@ -462,25 +462,11 @@ static int appletb_probe(struct hid_device *hdev, const struct hid_device_id *id
 	spin_lock_init(&tb_data->tb_mode_lock);
 	INIT_DELAYED_WORK(&tb_data->tb_mode_work, appletb_set_tb_mode_worker);
 
-	/* Set up the input handler */
-	tb_data->inp_handler.event = appletb_inp_event;
-	tb_data->inp_handler.connect = appletb_inp_connect;
-	tb_data->inp_handler.disconnect = appletb_inp_disconnect;
-	tb_data->inp_handler.name = "appletb";
-	tb_data->inp_handler.id_table = appletb_input_devices;
-	tb_data->inp_handler.private = tb_data;
-
-	rc = input_register_handler(&tb_data->inp_handler);
-	if (rc) {
-		hid_err(hdev, "Unabled to register keyboard handler (%d)\n", rc);
-		goto free_mem;
-	}
-
 	/* initialize the usb-device */
 	rc = appletb_get_tb_usb_dev_info(tb_data, &hdev->dev);
 	if (rc) {
 		hid_err(hdev, "Failed to find touchbar device (%d)\n", rc);
-		goto unreg_handler;
+		goto free_mem;
 	}
 
 	cancel_delayed_work_sync(&tb_data->tb_mode_work);
@@ -503,15 +489,29 @@ static int appletb_probe(struct hid_device *hdev, const struct hid_device_id *id
 		goto cancel_work;
 	}
 
+	/* Set up the input handler */
+	tb_data->inp_handler.event = appletb_inp_event;
+	tb_data->inp_handler.connect = appletb_inp_connect;
+	tb_data->inp_handler.disconnect = appletb_inp_disconnect;
+	tb_data->inp_handler.name = "appletb";
+	tb_data->inp_handler.id_table = appletb_input_devices;
+	tb_data->inp_handler.private = tb_data;
+
+	rc = input_register_handler(&tb_data->inp_handler);
+	if (rc) {
+		hid_err(hdev, "Unabled to register keyboard handler (%d)\n", rc);
+		goto stop_hw;
+	}
+
 	/* done */
 	hid_info(hdev, "module probe done.\n");
 
 	return 0;
 
+ stop_hw:
+	hid_hw_stop(hdev);
  cancel_work:
 	cancel_delayed_work_sync(&tb_data->tb_mode_work);
- unreg_handler:
-	input_unregister_handler(&tb_data->inp_handler);
  free_mem:
 	kfree(tb_data);
 
@@ -524,10 +524,10 @@ static void appletb_remove(struct hid_device *hdev)
 
 	input_unregister_handler(&tb_data->inp_handler);
 
+	hid_hw_stop(hdev);
+
 	cancel_delayed_work_sync(&tb_data->tb_mode_work);
 	appletb_set_tb_mode(tb_data, APPLETB_CMD_MODE_OFF);
-
-	hid_hw_stop(hdev);
 
 	kfree(tb_data);
 
