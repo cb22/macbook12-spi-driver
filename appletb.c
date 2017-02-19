@@ -20,6 +20,7 @@
 #include <linux/workqueue.h>
 #include <linux/jiffies.h>
 #include <linux/spinlock.h>
+#include <linux/sysfs.h>
 
 
 #define USB_ID_VENDOR_APPLE	0x05ac
@@ -38,9 +39,26 @@
 #define APPLETB_DEVID_TOUCHPAD	2
 
 
-static int appletb_tb_idle_timeout = 60;
-module_param_named(idle_timeout, appletb_tb_idle_timeout, int, 0664);
-MODULE_PARM_DESC(idle_timeout, "Touchbar idle timeout (in seconds)");
+static int appletb_tb_def_idle_timeout = 5*60;
+module_param_named(default_idle_timeout, appletb_tb_def_idle_timeout, int, 0444);
+MODULE_PARM_DESC(idle_timeout, "Default touchbar idle timeout (in seconds); "
+			       "0 disables touchbar, -1 disables timeout");
+
+
+static ssize_t idle_timeout_show(struct device *dev, struct device_attribute *attr,
+				 char *buf);
+static ssize_t idle_timeout_store(struct device *dev, struct device_attribute *attr,
+				  const char *buf, size_t size);
+static DEVICE_ATTR_RW(idle_timeout);
+
+static struct attribute *appletb_attrs[] = {
+	&dev_attr_idle_timeout.attr,
+	NULL,
+};
+
+static const struct attribute_group appletb_attr_group = {
+	.attrs = appletb_attrs,
+};
 
 
 struct appletb_data {
@@ -62,6 +80,8 @@ struct appletb_data {
 	bool			tb_autopm_off;
 	struct delayed_work	tb_mode_work;
 	spinlock_t		tb_mode_lock;
+
+	int			idle_timeout;
 };
 
 struct appletb_key_translation {
@@ -165,9 +185,10 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	unsigned char pending_mode;
 	bool any_tb_key_pressed;
 
+	/* get state */
 	spin_lock(&tb_data->tb_mode_lock);
 
-	time_left = appletb_tb_idle_timeout -
+	time_left = tb_data->idle_timeout -
 		ktime_ms_delta(ktime_get(), tb_data->last_event_time) / 1000;
 
 	pending_mode = tb_data->pnd_tb_mode;
@@ -177,19 +198,25 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 
 	spin_unlock(&tb_data->tb_mode_lock);
 
+	/* handle explicit mode-change request */
 	if (pending_mode != APPLETB_CMD_MODE_NONE) {
-		/* explicit mode-change requested */
 		appletb_set_tb_mode(tb_data, pending_mode);
-		schedule_delayed_work(&tb_data->tb_mode_work,
-			msecs_to_jiffies(appletb_tb_idle_timeout * 1000));
-	} else if (time_left > 0) {
-		/* we fired too soon - re-schedule */
+		time_left = tb_data->idle_timeout;
+	}
+
+	/* if no idle timeout, we're done */
+	if (tb_data->idle_timeout <= 0)
+		return;
+
+	/* manage idle timeout */
+	if (time_left > 0) {
+		/* we fired too soon or had a mode-change- re-schedule */
 		schedule_delayed_work(&tb_data->tb_mode_work,
 				      msecs_to_jiffies(time_left * 1000));
 	} else if (any_tb_key_pressed) {
 		/* keys are still pressed - re-schedule */
 		schedule_delayed_work(&tb_data->tb_mode_work,
-			msecs_to_jiffies(appletb_tb_idle_timeout * 1000));
+			msecs_to_jiffies(tb_data->idle_timeout * 1000));
 	} else {
 		/* idle timeout reached */
 		appletb_set_tb_mode(tb_data, APPLETB_CMD_MODE_OFF);
@@ -213,6 +240,48 @@ static unsigned char appletb_get_tb_mode(struct appletb_data *tb_data)
 {
 	return tb_data->pnd_tb_mode != APPLETB_CMD_MODE_NONE ?
 				tb_data->pnd_tb_mode : tb_data->cur_tb_mode;
+}
+
+static void update_touchbar_mode(struct appletb_data *tb_data)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&tb_data->tb_mode_lock, flags);
+
+	if (tb_data->idle_timeout < 0 &&
+	    appletb_get_tb_mode(tb_data) == APPLETB_CMD_MODE_OFF)
+		tb_data->pnd_tb_mode = APPLETB_CMD_MODE_SPCL;
+	else if (tb_data->idle_timeout == 0)
+		tb_data->pnd_tb_mode = APPLETB_CMD_MODE_OFF;
+
+	spin_unlock_irqrestore(&tb_data->tb_mode_lock, flags);
+
+	cancel_delayed_work(&tb_data->tb_mode_work);
+	schedule_delayed_work(&tb_data->tb_mode_work, 0);
+}
+
+static ssize_t idle_timeout_show(struct device *dev, struct device_attribute *attr,
+				 char *buf)
+{
+	struct appletb_data *tb_data = dev_get_drvdata(dev);
+	return snprintf(buf, PAGE_SIZE, "%d\n", tb_data->idle_timeout);
+}
+
+static ssize_t idle_timeout_store(struct device *dev, struct device_attribute *attr,
+				  const char *buf, size_t size)
+{
+	struct appletb_data *tb_data = dev_get_drvdata(dev);
+	char *end;
+	long new;
+
+	new = simple_strtol(buf, &end, 0);
+	if (end == buf || new > INT_MAX || new < -1)
+		return -EINVAL;
+
+	tb_data->idle_timeout = new;
+	update_touchbar_mode(tb_data);
+
+	return size;
 }
 
 static int appletb_tb_key_to_slot(unsigned int code)
@@ -455,10 +524,7 @@ static int appletb_probe(struct hid_device *hdev, const struct hid_device_id *id
 	if (!tb_data)
 		return -ENOMEM;
 
-	/* Initialize the driver data */
-	tb_data->cur_tb_mode = APPLETB_CMD_MODE_OFF;
-	tb_data->pnd_tb_mode = APPLETB_CMD_MODE_NONE;
-
+	/* Initialize structures */
 	spin_lock_init(&tb_data->tb_mode_lock);
 	INIT_DELAYED_WORK(&tb_data->tb_mode_work, appletb_set_tb_mode_worker);
 
@@ -469,10 +535,12 @@ static int appletb_probe(struct hid_device *hdev, const struct hid_device_id *id
 		goto free_mem;
 	}
 
-	cancel_delayed_work_sync(&tb_data->tb_mode_work);
-	appletb_set_tb_mode(tb_data, APPLETB_CMD_MODE_SPCL);
-	schedule_delayed_work(&tb_data->tb_mode_work,
-		      msecs_to_jiffies(appletb_tb_idle_timeout * 1000));
+	/* initialize the touchbar */
+	tb_data->cur_tb_mode = APPLETB_CMD_MODE_OFF;
+	tb_data->pnd_tb_mode = APPLETB_CMD_MODE_SPCL;
+
+	tb_data->idle_timeout = appletb_tb_def_idle_timeout;
+	update_touchbar_mode(tb_data);
 
 	/* Set up the hid */
 	hid_set_drvdata(hdev, tb_data);
@@ -503,11 +571,20 @@ static int appletb_probe(struct hid_device *hdev, const struct hid_device_id *id
 		goto stop_hw;
 	}
 
+	/* initialize sysfs attributes */
+	rc = sysfs_create_group(&hdev->dev.kobj, &appletb_attr_group);
+	if (rc) {
+		hid_err(hdev, "Failed to create sysfs attributes (%d)\n", rc);
+		goto unreg_handler;
+	}
+
 	/* done */
 	hid_info(hdev, "module probe done.\n");
 
 	return 0;
 
+ unreg_handler:
+	input_unregister_handler(&tb_data->inp_handler);
  stop_hw:
 	hid_hw_stop(hdev);
  cancel_work:
@@ -521,6 +598,8 @@ static int appletb_probe(struct hid_device *hdev, const struct hid_device_id *id
 static void appletb_remove(struct hid_device *hdev)
 {
 	struct appletb_data *tb_data = hid_get_drvdata(hdev);
+
+	sysfs_remove_group(&hdev->dev.kobj, &appletb_attr_group);
 
 	input_unregister_handler(&tb_data->inp_handler);
 
