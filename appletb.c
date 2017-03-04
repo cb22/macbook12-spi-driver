@@ -290,7 +290,7 @@ static void update_touchbar_mode(struct appletb_data *tb_data)
 
 	if (tb_data->idle_timeout < 0 &&
 	    appletb_get_cur_tb_mode(tb_data) == APPLETB_CMD_MODE_OFF)
-		tb_data->pnd_tb_mode = APPLETB_CMD_MODE_SPCL;
+		tb_data->pnd_tb_mode = appletb_get_fn_tb_mode(tb_data);
 	else if (tb_data->idle_timeout == 0)
 		tb_data->pnd_tb_mode = APPLETB_CMD_MODE_OFF;
 
