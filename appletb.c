@@ -307,6 +307,9 @@ static void appletb_do_tb_mode_switch(struct appletb_data *tb_data)
 {
 	unsigned char want_mode;
 
+	if (tb_data->idle_timeout == 0)
+		return;
+
 	want_mode = appletb_get_fn_tb_mode(tb_data);
 
 	if (appletb_get_cur_tb_mode(tb_data) != want_mode &&
