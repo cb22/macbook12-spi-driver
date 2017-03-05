@@ -144,15 +144,15 @@ static int appletb_send_usb_ctrl_req(struct usb_interface *iface,
 
 	kfree(buffer);
 
-	return rc;
+	return likely(rc > 0) ? 0 : rc;
 }
 
-static void appletb_set_tb_mode(struct appletb_data *tb_data, unsigned char mode)
+static int appletb_set_tb_mode(struct appletb_data *tb_data, unsigned char mode)
 {
 	int rc;
 
 	if (!tb_data->tb_usb_iface)
-		return;
+		return -1;
 
 	if (mode != APPLETB_CMD_MODE_OFF &&
 	    tb_data->cur_tb_mode == APPLETB_CMD_MODE_OFF) {
@@ -169,10 +169,8 @@ static void appletb_set_tb_mode(struct appletb_data *tb_data, unsigned char mode
 				       USB_REQ_SET_CONFIGURATION,
 				       USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
 				       0x0302, tb_data->tb_usb_ifnum, &mode, 1);
-	if (rc < 0) {
+	if (unlikely(rc < 0))
 		pr_err("Failed to set touchbar mode to %u (%d)\n", mode, rc);
-		return;
-	}
 
 	if (mode == APPLETB_CMD_MODE_OFF &&
 	    tb_data->cur_tb_mode != APPLETB_CMD_MODE_OFF) {
@@ -182,7 +180,7 @@ static void appletb_set_tb_mode(struct appletb_data *tb_data, unsigned char mode
 		}
 	}
 
-	tb_data->cur_tb_mode = mode;
+	return rc;
 }
 
 static bool appletb_any_tb_key_pressed(struct appletb_data *tb_data)
@@ -203,7 +201,8 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 		container_of(work, struct appletb_data, tb_mode_work.work);
 	s64 time_left;
 	unsigned char pending_mode;
-	bool any_tb_key_pressed;
+	bool any_tb_key_pressed, need_reschedule;
+	int rc1 = 1;
 
 	/* get state */
 	spin_lock(&tb_data->tb_mode_lock);
@@ -212,7 +211,6 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 		ktime_ms_delta(ktime_get(), tb_data->last_event_time) / 1000;
 
 	pending_mode = tb_data->pnd_tb_mode;
-	tb_data->pnd_tb_mode = APPLETB_CMD_MODE_NONE;
 
 	any_tb_key_pressed = appletb_any_tb_key_pressed(tb_data);
 
@@ -220,8 +218,29 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 
 	/* handle explicit mode-change request */
 	if (pending_mode != APPLETB_CMD_MODE_NONE) {
-		appletb_set_tb_mode(tb_data, pending_mode);
+		rc1 = appletb_set_tb_mode(tb_data, pending_mode);
 		time_left = tb_data->idle_timeout;
+	}
+
+	/* update pending states */
+	need_reschedule = false;
+
+	spin_lock(&tb_data->tb_mode_lock);
+
+	if (rc1 == 0) {
+		tb_data->cur_tb_mode = pending_mode;
+
+		if (tb_data->pnd_tb_mode == pending_mode)
+			tb_data->pnd_tb_mode = APPLETB_CMD_MODE_NONE;
+		else
+			need_reschedule = true;
+	}
+
+	spin_unlock(&tb_data->tb_mode_lock);
+
+	if (need_reschedule) {
+		schedule_delayed_work(&tb_data->tb_mode_work, 0);
+		return;
 	}
 
 	/* if no idle timeout, we're done */
