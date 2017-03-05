@@ -704,8 +704,9 @@ static void appletb_remove(struct hid_device *hdev)
 	hid_info(hdev, "module remove done.\n");
 }
 
+#ifdef CONFIG_PM
 /* TODO: is this necessary? */
-static int appletb_resume(struct hid_device *hdev)
+static int appletb_reset_resume(struct hid_device *hdev)
 {
 	struct appletb_data *tb_data = hid_get_drvdata(hdev);
 
@@ -716,6 +717,7 @@ static int appletb_resume(struct hid_device *hdev)
 
 	return 0;
 }
+#endif
 
 static const struct hid_device_id appletb_touchbar_devices[] = {
 	{
@@ -734,7 +736,7 @@ static struct hid_driver appletb_driver = {
 	.event = appletb_tb_event,
 	.input_configured = appletb_input_configured,
 #ifdef CONFIG_PM
-	.resume = appletb_resume,
+	.reset_resume = appletb_reset_resume,
 #endif
 };
 
