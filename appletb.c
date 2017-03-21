@@ -34,6 +34,11 @@
 #define APPLETB_CMD_MODE_OFF	3
 #define APPLETB_CMD_MODE_NONE	255
 
+#define APPLETB_CMD_DISP_ON 	1
+#define APPLETB_CMD_DISP_DIM	2
+#define APPLETB_CMD_DISP_OFF	4
+#define APPLETB_CMD_DISP_NONE	255
+
 #define APPLETB_FN_MODE_FKEYS	0
 #define APPLETB_FN_MODE_NORM	1
 #define APPLETB_FN_MODE_INV	2
@@ -43,6 +48,8 @@
 #define APPLETB_DEVID_TOUCHBAR	0
 #define APPLETB_DEVID_KEYBOARD	1
 #define APPLETB_DEVID_TOUCHPAD	2
+
+#define APPLETB_MAX_DIM_TIME	30
 
 
 static int appletb_tb_def_idle_timeout = 5*60;
@@ -96,10 +103,13 @@ struct appletb_data {
 
 	unsigned char		cur_tb_mode;
 	unsigned char		pnd_tb_mode;
+	unsigned char		cur_tb_disp;
+	unsigned char		pnd_tb_disp;
 	bool			tb_autopm_off;
 	struct delayed_work	tb_mode_work;
 	spinlock_t		tb_mode_lock;
 
+	int			dim_timeout;
 	int			idle_timeout;
 	int			fn_mode;
 };
@@ -150,19 +160,17 @@ static int appletb_send_usb_ctrl_req(struct usb_interface *iface,
 static int appletb_set_tb_mode(struct appletb_data *tb_data, unsigned char mode)
 {
 	int rc;
+	bool autopm_off = false;
 
 	if (!tb_data->tb_usb_iface)
 		return -1;
 
-	if (mode != APPLETB_CMD_MODE_OFF &&
-	    tb_data->cur_tb_mode == APPLETB_CMD_MODE_OFF) {
-		rc = usb_autopm_get_interface(tb_data->tb_usb_iface);
-		if (likely(rc == 0))
-			tb_data->tb_autopm_off = true;
-		else
-			pr_err("Failed to disable auto-pm on touchbar device "
-			       "(%d)\n", rc);
-	}
+	rc = usb_autopm_get_interface(tb_data->tb_usb_iface);
+	if (likely(rc == 0))
+		autopm_off = true;
+	else
+		pr_err("Failed to disable auto-pm on touchbar device (%d)\n",
+		       rc);
 
 	rc = appletb_send_usb_ctrl_req(tb_data->tb_usb_iface,
 				       tb_data->tb_usb_epnum,
@@ -172,8 +180,43 @@ static int appletb_set_tb_mode(struct appletb_data *tb_data, unsigned char mode)
 	if (unlikely(rc < 0))
 		pr_err("Failed to set touchbar mode to %u (%d)\n", mode, rc);
 
-	if (mode == APPLETB_CMD_MODE_OFF &&
-	    tb_data->cur_tb_mode != APPLETB_CMD_MODE_OFF) {
+	if (autopm_off)
+		usb_autopm_put_interface(tb_data->tb_usb_iface);
+
+	return rc;
+}
+
+static int appletb_set_tb_disp(struct appletb_data *tb_data, unsigned char disp)
+{
+	unsigned char cmd[] = { 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	int rc;
+
+	if (!tb_data->tb_usb_iface)
+		return -1;
+
+	if (disp != APPLETB_CMD_DISP_OFF &&
+	    tb_data->cur_tb_disp == APPLETB_CMD_DISP_OFF) {
+		rc = usb_autopm_get_interface(tb_data->tb_usb_iface);
+		if (likely(rc == 0))
+			tb_data->tb_autopm_off = true;
+		else
+			pr_err("Failed to disable auto-pm on touchbar device "
+			       "(%d)\n", rc);
+	}
+
+	cmd[2] = disp;
+	rc = appletb_send_usb_ctrl_req(tb_data->tb_usb_iface,
+				       tb_data->tb_usb_epnum,
+				       USB_REQ_SET_CONFIGURATION,
+				       USB_DIR_OUT | USB_TYPE_CLASS |
+						USB_RECIP_INTERFACE,
+				       0x0302, tb_data->tb_usb_ifnum+1,
+				       cmd, sizeof(cmd));
+	if (unlikely(rc < 0))
+		pr_err("Failed to set touchbar display to %u (%d)\n", disp, rc);
+
+	if (disp == APPLETB_CMD_DISP_OFF &&
+	    tb_data->cur_tb_disp != APPLETB_CMD_DISP_OFF) {
 		if (tb_data->tb_autopm_off) {
 			usb_autopm_put_interface(tb_data->tb_usb_iface);
 			tb_data->tb_autopm_off = false;
@@ -199,33 +242,28 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 {
 	struct appletb_data *tb_data =
 		container_of(work, struct appletb_data, tb_mode_work.work);
-	s64 time_left;
+	s64 time_left, next_timeout;
 	unsigned char pending_mode;
+	unsigned char pending_disp;
 	bool any_tb_key_pressed, need_reschedule;
-	int rc1 = 1;
+	int rc1 = 1, rc2 = 1;
 
-	/* get state */
 	spin_lock(&tb_data->tb_mode_lock);
 
-	time_left = tb_data->idle_timeout -
-		ktime_ms_delta(ktime_get(), tb_data->last_event_time) / 1000;
-
+	/* handle explicit mode-change request */
 	pending_mode = tb_data->pnd_tb_mode;
-
-	any_tb_key_pressed = appletb_any_tb_key_pressed(tb_data);
+	pending_disp = tb_data->pnd_tb_disp;
 
 	spin_unlock(&tb_data->tb_mode_lock);
 
-	/* handle explicit mode-change request */
-	if (pending_mode != APPLETB_CMD_MODE_NONE) {
+	if (pending_mode != APPLETB_CMD_MODE_NONE)
 		rc1 = appletb_set_tb_mode(tb_data, pending_mode);
-		time_left = tb_data->idle_timeout;
-	}
-
-	/* update pending states */
-	need_reschedule = false;
+	if (pending_disp != APPLETB_CMD_DISP_NONE)
+		rc2 = appletb_set_tb_disp(tb_data, pending_disp);
 
 	spin_lock(&tb_data->tb_mode_lock);
+
+	need_reschedule = false;
 
 	if (rc1 == 0) {
 		tb_data->cur_tb_mode = pending_mode;
@@ -236,8 +274,40 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 			need_reschedule = true;
 	}
 
+	if (rc2 == 0) {
+		tb_data->cur_tb_disp = pending_disp;
+
+		if (tb_data->pnd_tb_disp == pending_disp)
+			tb_data->pnd_tb_disp = APPLETB_CMD_DISP_NONE;
+		else
+			need_reschedule = true;
+	}
+
+	/* calculate time left to next timeout */
+	next_timeout = (tb_data->dim_timeout > 0) ? tb_data->dim_timeout :
+						    tb_data->idle_timeout;
+
+	if (pending_mode != APPLETB_CMD_MODE_NONE ||
+	    pending_disp != APPLETB_CMD_DISP_NONE) {
+		time_left = next_timeout;
+	} else {
+		s64 idle_time =
+			ktime_ms_delta(ktime_get(), tb_data->last_event_time) /
+			1000;
+
+		if (idle_time >= tb_data->idle_timeout)
+			time_left = 0;
+		else if (idle_time >= next_timeout)
+			time_left = idle_time - tb_data->idle_timeout;
+		else
+			time_left = next_timeout - idle_time;
+	}
+
+	any_tb_key_pressed = appletb_any_tb_key_pressed(tb_data);
+
 	spin_unlock(&tb_data->tb_mode_lock);
 
+	/* a new command arrived while we were busy - handle it */
 	if (need_reschedule) {
 		schedule_delayed_work(&tb_data->tb_mode_work, 0);
 		return;
@@ -255,10 +325,21 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	} else if (any_tb_key_pressed) {
 		/* keys are still pressed - re-schedule */
 		schedule_delayed_work(&tb_data->tb_mode_work,
-			msecs_to_jiffies(tb_data->idle_timeout * 1000));
+				      msecs_to_jiffies(next_timeout * 1000));
 	} else {
-		/* idle timeout reached */
-		appletb_set_tb_mode(tb_data, APPLETB_CMD_MODE_OFF);
+		/* dim or idle timeout reached */
+		int next_disp = (time_left < 0) ? APPLETB_CMD_DISP_DIM :
+						  APPLETB_CMD_DISP_OFF;
+		if (appletb_set_tb_disp(tb_data, next_disp) == 0) {
+			spin_lock(&tb_data->tb_mode_lock);
+			tb_data->cur_tb_disp = next_disp;
+			spin_unlock(&tb_data->tb_mode_lock);
+		}
+
+		if (next_disp == APPLETB_CMD_DISP_DIM) {
+			schedule_delayed_work(&tb_data->tb_mode_work,
+				      msecs_to_jiffies(-time_left * 1000));
+		}
 	}
 }
 
@@ -281,6 +362,12 @@ static unsigned char appletb_get_cur_tb_mode(struct appletb_data *tb_data)
 				tb_data->pnd_tb_mode : tb_data->cur_tb_mode;
 }
 
+static unsigned char appletb_get_cur_tb_disp(struct appletb_data *tb_data)
+{
+	return tb_data->pnd_tb_disp != APPLETB_CMD_DISP_NONE ?
+				tb_data->pnd_tb_disp : tb_data->cur_tb_disp;
+}
+
 static unsigned char appletb_get_fn_tb_mode(struct appletb_data *tb_data)
 {
 	switch (tb_data->fn_mode) {
@@ -301,43 +388,63 @@ static unsigned char appletb_get_fn_tb_mode(struct appletb_data *tb_data)
 	}
 }
 
-static void update_touchbar_mode(struct appletb_data *tb_data)
+/* Switch touchbar mode and display when mode or display not the desired ones.
+ */
+static void appletb_update_touchbar_no_lock(struct appletb_data *tb_data,
+					    bool force)
+{
+	unsigned char want_mode;
+	unsigned char want_disp;
+	bool need_update = false;
+
+	/* calculate the new modes */
+	want_mode = appletb_get_fn_tb_mode(tb_data);
+	want_disp = tb_data->dim_timeout > 0 ? APPLETB_CMD_DISP_ON :
+					       APPLETB_CMD_DISP_DIM;
+
+	if (tb_data->idle_timeout == 0) {
+		want_mode = APPLETB_CMD_MODE_OFF;
+		want_disp = APPLETB_CMD_DISP_OFF;
+	}
+
+	/* see if we need to update the touchbar, taking into account that we
+	 * generally don't want to switch modes while a touchbar key is pressed.
+	 */
+	if ((appletb_get_cur_tb_mode(tb_data) != want_mode ||
+	     appletb_get_cur_tb_disp(tb_data) != want_disp ||
+	     force) &&
+	    !appletb_any_tb_key_pressed(tb_data)) {
+		tb_data->pnd_tb_mode = want_mode;
+		tb_data->pnd_tb_disp = want_disp;
+		need_update = true;
+	} else if (want_disp != APPLETB_CMD_DISP_OFF &&
+		   appletb_get_cur_tb_disp(tb_data) != want_disp &&
+		   appletb_any_tb_key_pressed(tb_data)) {
+		tb_data->pnd_tb_disp = want_disp;
+		need_update = true;
+	}
+
+	/* schedule the update if desired */
+	//pr_info_ratelimited("update: need_update=%d, want_mode=%d, cur-mode=%d, want_disp=%d, cur-disp=%d\n", need_update, want_mode, tb_data->cur_tb_mode, want_disp, tb_data->cur_tb_disp);
+	if (need_update) {
+		cancel_delayed_work(&tb_data->tb_mode_work);
+		schedule_delayed_work(&tb_data->tb_mode_work, 0);
+	}
+}
+
+static void appletb_update_touchbar(struct appletb_data *tb_data, bool force)
 {
 	unsigned long flags;
 
 	spin_lock_irqsave(&tb_data->tb_mode_lock, flags);
-
-	if (tb_data->idle_timeout < 0 &&
-	    appletb_get_cur_tb_mode(tb_data) == APPLETB_CMD_MODE_OFF)
-		tb_data->pnd_tb_mode = appletb_get_fn_tb_mode(tb_data);
-	else if (tb_data->idle_timeout == 0)
-		tb_data->pnd_tb_mode = APPLETB_CMD_MODE_OFF;
-
+	appletb_update_touchbar_no_lock(tb_data, force);
 	spin_unlock_irqrestore(&tb_data->tb_mode_lock, flags);
-
-	cancel_delayed_work(&tb_data->tb_mode_work);
-	schedule_delayed_work(&tb_data->tb_mode_work, 0);
 }
 
-/* Switch touchbar mode when mode is not the desired one and no touchbar keys
- * are pressed.
- */
-static void appletb_do_tb_mode_switch(struct appletb_data *tb_data)
+static void appletb_set_idle_timeout(struct appletb_data *tb_data, int new)
 {
-	unsigned char want_mode;
-
-	if (tb_data->idle_timeout == 0)
-		return;
-
-	want_mode = appletb_get_fn_tb_mode(tb_data);
-
-	if (appletb_get_cur_tb_mode(tb_data) != want_mode &&
-	    !appletb_any_tb_key_pressed(tb_data)) {
-		tb_data->pnd_tb_mode = want_mode;
-
-		cancel_delayed_work(&tb_data->tb_mode_work);
-		schedule_delayed_work(&tb_data->tb_mode_work, 0);
-	}
+	tb_data->idle_timeout = new;
+	tb_data->dim_timeout = new - min(APPLETB_MAX_DIM_TIME, new / 3);
 }
 
 static ssize_t idle_timeout_show(struct device *dev, struct device_attribute *attr,
@@ -358,8 +465,8 @@ static ssize_t idle_timeout_store(struct device *dev, struct device_attribute *a
 	if (end == buf || new > INT_MAX || new < -1)
 		return -EINVAL;
 
-	tb_data->idle_timeout = new;
-	update_touchbar_mode(tb_data);
+	appletb_set_idle_timeout(tb_data, new);
+	appletb_update_touchbar(tb_data, true);
 
 	return size;
 }
@@ -383,7 +490,7 @@ static ssize_t fn_mode_store(struct device *dev, struct device_attribute *attr,
 		return -EINVAL;
 
 	tb_data->fn_mode = new;
-	appletb_do_tb_mode_switch(tb_data);
+	appletb_update_touchbar(tb_data, false);
 
 	return size;
 }
@@ -442,12 +549,16 @@ static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
 	tb_data->last_event_time = ktime_get();
 
 	/* only switch touchbar mode when no touchbar keys are pressed */
-	appletb_do_tb_mode_switch(tb_data);
+	appletb_update_touchbar_no_lock(tb_data, false);
 
+	/* we want suppress touchbar keys while touchbar is off */
+	if (tb_data->cur_tb_mode == APPLETB_CMD_MODE_OFF ||
+	    tb_data->cur_tb_disp == APPLETB_CMD_DISP_OFF) {
+		rc = 1;
 	/* translate special keys */
-	if (usage->type == EV_KEY &&
-	    (new_code = appletb_fn_to_special(usage->code)) &&
-	    appletb_get_cur_tb_mode(tb_data) == APPLETB_CMD_MODE_SPCL) {
+	} else if (usage->type == EV_KEY &&
+		   (new_code = appletb_fn_to_special(usage->code)) &&
+		   appletb_get_cur_tb_mode(tb_data) == APPLETB_CMD_MODE_SPCL) {
 		input_event(field->hidinput->input, usage->type, new_code,
 			    value);
 		rc = 1;
@@ -475,7 +586,7 @@ static void appletb_inp_event(struct input_handle *handle, unsigned int type,
 	tb_data->last_event_time = ktime_get();
 
 	/* only switch touchbar mode when no touchbar keys are pressed */
-	appletb_do_tb_mode_switch(tb_data);
+	appletb_update_touchbar_no_lock(tb_data, false);
 
 	spin_unlock_irqrestore(&tb_data->tb_mode_lock, flags);
 }
@@ -626,12 +737,12 @@ static int appletb_probe(struct hid_device *hdev, const struct hid_device_id *id
 		tb_data->fn_mode = appletb_tb_def_fn_mode;
 	else
 		tb_data->fn_mode = APPLETB_FN_MODE_NORM;
-	tb_data->idle_timeout = appletb_tb_def_idle_timeout;
+	appletb_set_idle_timeout(tb_data, appletb_tb_def_idle_timeout);
 
 	tb_data->cur_tb_mode = APPLETB_CMD_MODE_OFF;
-	tb_data->pnd_tb_mode = appletb_get_fn_tb_mode(tb_data);
+	tb_data->cur_tb_disp = APPLETB_CMD_DISP_OFF;
 
-	update_touchbar_mode(tb_data);
+	appletb_update_touchbar(tb_data, false);
 
 	/* Set up the hid */
 	hid_set_drvdata(hdev, tb_data);
@@ -697,6 +808,7 @@ static void appletb_remove(struct hid_device *hdev)
 	hid_hw_stop(hdev);
 
 	cancel_delayed_work_sync(&tb_data->tb_mode_work);
+	appletb_set_tb_disp(tb_data, APPLETB_CMD_DISP_OFF);
 	appletb_set_tb_mode(tb_data, APPLETB_CMD_MODE_OFF);
 
 	kfree(tb_data);
@@ -712,6 +824,7 @@ static int appletb_reset_resume(struct hid_device *hdev)
 
 	/* restore touchbar state */
 	appletb_set_tb_mode(tb_data, tb_data->cur_tb_mode);
+	appletb_set_tb_disp(tb_data, tb_data->cur_tb_disp);
 
 	hid_info(hdev, "device resume done.\n");
 
