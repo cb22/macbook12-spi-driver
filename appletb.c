@@ -738,6 +738,7 @@ static int appletb_probe(struct hid_device *hdev, const struct hid_device_id *id
 	else
 		tb_data->fn_mode = APPLETB_FN_MODE_NORM;
 	appletb_set_idle_timeout(tb_data, appletb_tb_def_idle_timeout);
+	tb_data->last_event_time = ktime_get();
 
 	tb_data->cur_tb_mode = APPLETB_CMD_MODE_OFF;
 	tb_data->cur_tb_disp = APPLETB_CMD_DISP_OFF;
@@ -825,6 +826,7 @@ static int appletb_reset_resume(struct hid_device *hdev)
 	/* restore touchbar state */
 	appletb_set_tb_mode(tb_data, tb_data->cur_tb_mode);
 	appletb_set_tb_disp(tb_data, tb_data->cur_tb_disp);
+	tb_data->last_event_time = ktime_get();
 
 	hid_info(hdev, "device resume done.\n");
 
