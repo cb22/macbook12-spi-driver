@@ -43,7 +43,6 @@
 #define MAX_FINGERS		6
 #define MAX_FINGER_ORIENTATION	16384
 
-#define TXFR_DELAY		100	// FIXME: get this from _DSM.spiCSDelay
 
 struct keyboard_protocol {
 	u16		packet_type;
@@ -93,6 +92,33 @@ struct touchpad_protocol {
 	u8			unknown5[208];
 };
 
+struct spi_settings {
+	u64	spi_sclk_period;	/* period in ns */
+	u64	spi_word_size;   	/* in number of bits */
+	u64	spi_bit_order;   	/* 1 = MSB_FIRST, 0 = LSB_FIRST */
+	u64	spi_spo;        	/* clock polarity: 0 = low, 1 = high */
+	u64	spi_sph;		/* clock phase: 0 = first, 1 = second */
+	u64	spi_cs_delay;    	/* in 10us (?) */
+	u64	reset_a2r_usec;  	/* ? (cur val: 10) */
+	u64	reset_rec_usec;  	/* ? (cur val: 10) */
+};
+
+struct applespi_acpi_map_entry {
+	char *name;
+	size_t field_offset;
+};
+
+static const struct applespi_acpi_map_entry applespi_spi_settings_map[] = {
+	{ "spiSclkPeriod", offsetof(struct spi_settings, spi_sclk_period) },
+	{ "spiWordSize",   offsetof(struct spi_settings, spi_word_size) },
+	{ "spiBitOrder",   offsetof(struct spi_settings, spi_bit_order) },
+	{ "spiSPO",        offsetof(struct spi_settings, spi_spo) },
+	{ "spiSPH",        offsetof(struct spi_settings, spi_sph) },
+	{ "spiCSDelay",    offsetof(struct spi_settings, spi_cs_delay) },
+	{ "resetA2RUsec",  offsetof(struct spi_settings, reset_a2r_usec) },
+	{ "resetRecUsec",  offsetof(struct spi_settings, reset_rec_usec) },
+};
+
 struct applespi_tp_info {
 	int	x_min;
 	int	x_max;
@@ -102,6 +128,7 @@ struct applespi_tp_info {
 
 struct applespi_data {
 	struct spi_device		*spi;
+	struct spi_settings		spi_settings;
 	struct input_dev		*keyboard_input_dev;
 	struct input_dev		*touchpad_input_dev;
 
@@ -176,6 +203,8 @@ static const struct applespi_key_translation applespi_fn_codes[] = {
 	{ 80,  KEY_HOME },
 	{ 79,  KEY_END },
 };
+
+static u8 *acpi_dsm_uuid = "a0b5b7c6-1318-441c-b0c9-fe695eaf949b";
 
 static struct applespi_tp_info applespi_macbookpro131_info = { -6243, 6749, -170, 7685 };
 static struct applespi_tp_info applespi_macbookpro133_info = { -7456, 7976, -163, 9283 };
@@ -260,20 +289,20 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 	struct spi_transfer t1 = {
 		.tx_buf			= applespi->tx_buffer,
 		.len			= APPLESPI_PACKET_SIZE,
-		.delay_usecs		= TXFR_DELAY,
+		.delay_usecs		= applespi->spi_settings.spi_cs_delay,
 	};
 
 	struct spi_transfer t2 = {
 		.rx_buf			= applespi->tx_status,
 		.len			= APPLESPI_STATUS_SIZE,
 		.cs_change		= 1,
-		.delay_usecs		= TXFR_DELAY,
+		.delay_usecs		= applespi->spi_settings.spi_cs_delay,
 	};
 
 	struct spi_transfer t3 = {
 		.rx_buf			= applespi->rx_buffer,
 		.len			= APPLESPI_PACKET_SIZE,
-		.delay_usecs		= TXFR_DELAY,
+		.delay_usecs		= applespi->spi_settings.spi_cs_delay,
 	};
 	struct spi_message      m;
 	ssize_t ret;
@@ -307,7 +336,7 @@ applespi_sync_read(struct applespi_data *applespi)
 	struct spi_transfer t = {
 		.rx_buf			= applespi->rx_buffer,
 		.len			= APPLESPI_PACKET_SIZE,
-		.delay_usecs		= TXFR_DELAY,
+		.delay_usecs		= applespi->spi_settings.spi_cs_delay,
 	};
 	struct spi_message      m;
 	ssize_t ret;
@@ -325,6 +354,82 @@ applespi_sync_read(struct applespi_data *applespi)
 		pr_warn("Error reading from device: %ld", ret);
 
 	return ret;
+}
+
+static int applespi_find_settings_field(const char *name)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(applespi_spi_settings_map); i++) {
+		if (strcmp(applespi_spi_settings_map[i].name, name) == 0)
+			return applespi_spi_settings_map[i].field_offset;
+	}
+
+	return -1;
+}
+
+static int applespi_get_spi_settings(struct applespi_data *applespi)
+{
+	u8 uuid[16];
+	union acpi_object *spi_info;
+	union acpi_object name;
+	union acpi_object value;
+	int i;
+	int field_off;
+	u64 *field;
+
+	acpi_str_to_uuid(acpi_dsm_uuid, uuid);
+
+	spi_info = acpi_evaluate_dsm(applespi->handle, uuid, 1, 1, NULL);
+	if (!spi_info) {
+		pr_err("Failed to get SPI info from _DSM method");
+		return -ENODEV;
+	}
+	if (spi_info->type != ACPI_TYPE_PACKAGE) {
+		pr_err("Unexpected data returned from SPI _DSM method: type=%d",
+		       spi_info->type);
+		ACPI_FREE(spi_info);
+		return -ENODEV;
+	}
+
+	/* The data is stored in pairs of items, first a string containing
+	 * the name of the item, followed by an 8-byte buffer containing the
+	 * value in little-endian.
+	 */
+	for (i = 0; i < spi_info->package.count - 1; i += 2) {
+		name = spi_info->package.elements[i];
+		value = spi_info->package.elements[i + 1];
+
+		if (!(name.type == ACPI_TYPE_STRING &&
+		      value.type == ACPI_TYPE_BUFFER &&
+		      value.buffer.length == 8)) {
+			pr_warn("Unexpected data returned from SPI _DSM method:"
+			        " name.type=%d, value.type=%d", name.type,
+				value.type);
+			continue;
+		}
+
+		field_off = applespi_find_settings_field(name.string.pointer);
+		if (field_off < 0) {
+			pr_debug("Skipping unknown SPI setting '%s'",
+				 name.string.pointer);
+			continue;
+		}
+
+		field = (u64 *) ((char *) &applespi->spi_settings + field_off);
+		*field = le64_to_cpu(*((__le64 *) value.buffer.pointer));
+	}
+	ACPI_FREE(spi_info);
+
+	/* acpi provided value is in 10us units */
+	applespi->spi_settings.spi_cs_delay *= 10;
+
+	return 0;
+}
+
+static int applespi_setup_spi(struct applespi_data *applespi)
+{
+	return applespi_get_spi_settings(applespi);
 }
 
 static int applespi_enable_spi(struct applespi_data *applespi)
@@ -534,7 +639,7 @@ applespi_async_init(struct applespi_data *applespi)
 
 	applespi->t.rx_buf = applespi->rx_buffer;
 	applespi->t.len = APPLESPI_PACKET_SIZE;
-	applespi->t.delay_usecs = TXFR_DELAY;
+	applespi->t.delay_usecs = applespi->spi_settings.spi_cs_delay;
 
 	spi_message_init(&applespi->m);
 	applespi->m.complete = applespi_async_read_complete;
@@ -682,6 +787,10 @@ static int applespi_probe(struct spi_device *spi)
 	}
 
 	/* Switch on the SPI interface */
+	result = applespi_setup_spi(applespi);
+	if (result)
+		return result;
+
 	result = applespi_enable_spi(applespi);
 	if (result)
 		return result;
