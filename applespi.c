@@ -173,7 +173,7 @@ static const struct applespi_key_translation applespi_fn_codes[] = {
 	{ 79,  KEY_END },
 };
 
-static struct applespi_tp_info applespi_macbookpro131_info = { -6243, 6749, -1085, 6770 };
+static struct applespi_tp_info applespi_macbookpro131_info = { -6243, 6749, -170, 7685 };
 static struct applespi_tp_info applespi_macbookpro133_info = { -7456, 7976, -163, 9283 };
 // MacBook11, MacBook12
 static struct applespi_tp_info applespi_default_info = { -4828, 5345, -203, 6803 };
