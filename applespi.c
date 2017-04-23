@@ -32,6 +32,7 @@
 #include <linux/input-polldev.h>
 
 #define APPLESPI_PACKET_SIZE    256
+#define APPLESPI_STATUS_SIZE    4
 
 #define PACKET_KEYBOARD         288
 #define PACKET_TOUCHPAD         544
@@ -41,6 +42,8 @@
 
 #define MAX_FINGERS		6
 #define MAX_FINGER_ORIENTATION	16384
+
+#define TXFR_DELAY		100	// FIXME: get this from _DSM.spiCSDelay
 
 struct keyboard_protocol {
 	u16		packet_type;
@@ -103,6 +106,7 @@ struct applespi_data {
 	struct input_dev		*touchpad_input_dev;
 
 	u8				*tx_buffer;
+	u8				*tx_status;
 	u8				*rx_buffer;
 
 	const struct applespi_tp_info	*tp_info;
@@ -239,28 +243,24 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 	The Windows driver always seems to do a 256 byte write, followed
 	by a 4 byte read with CS still the same, followed by a toggling of
 	CS and a 256 byte read for the real response.
-
-	For some reason, weird things happen at the proper speed (8MHz) but
-	everything seems to be OK at 400kHz
 	*/
 	struct spi_transfer t1 = {
 		.tx_buf			= applespi->tx_buffer,
 		.len			= APPLESPI_PACKET_SIZE,
-		.cs_change		= 1,
-		.speed_hz		= 400000
+		.delay_usecs		= TXFR_DELAY,
 	};
 
 	struct spi_transfer t2 = {
-		.rx_buf			= applespi->rx_buffer,
-		.len			= 4,
+		.rx_buf			= applespi->tx_status,
+		.len			= APPLESPI_STATUS_SIZE,
 		.cs_change		= 1,
-		.speed_hz		= 400000
+		.delay_usecs		= TXFR_DELAY,
 	};
 
 	struct spi_transfer t3 = {
 		.rx_buf			= applespi->rx_buffer,
 		.len			= APPLESPI_PACKET_SIZE,
-		.speed_hz		= 400000
+		.delay_usecs		= TXFR_DELAY,
 	};
 	struct spi_message      m;
 
@@ -268,6 +268,7 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 	spi_message_add_tail(&t1, &m);
 	spi_message_add_tail(&t2, &m);
 	spi_message_add_tail(&t3, &m);
+
 	return applespi_sync(applespi, &m);
 }
 
@@ -277,7 +278,7 @@ applespi_sync_read(struct applespi_data *applespi)
 	struct spi_transfer t = {
 		.rx_buf			= applespi->rx_buffer,
 		.len			= APPLESPI_PACKET_SIZE,
-		.speed_hz		= 400000
+		.delay_usecs		= TXFR_DELAY,
 	};
 	struct spi_message      m;
 
@@ -488,7 +489,7 @@ applespi_async_init(struct applespi_data *applespi)
 
 	applespi->t.rx_buf = applespi->rx_buffer;
 	applespi->t.len = APPLESPI_PACKET_SIZE;
-	applespi->t.speed_hz = 400000;
+	applespi->t.delay_usecs = TXFR_DELAY;
 
 	spi_message_init(&applespi->m);
 	applespi->m.complete = applespi_async_read_complete;
@@ -523,9 +524,10 @@ static int applespi_probe(struct spi_device *spi)
 
 	/* Create our buffers */
 	applespi->tx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE, GFP_KERNEL);
+	applespi->tx_status = devm_kmalloc(&spi->dev, APPLESPI_STATUS_SIZE, GFP_KERNEL);
 	applespi->rx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE, GFP_KERNEL);
 
-	if (!applespi->tx_buffer || !applespi->rx_buffer)
+	if (!applespi->tx_buffer || !applespi->tx_status || !applespi->rx_buffer)
 		return -ENOMEM;
 
 	/* Store the driver data */
