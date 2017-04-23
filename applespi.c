@@ -220,7 +220,7 @@ u8 *applespi_init_commands[] = {
 	"\x40\x02\x00\x00\x00\x00\x0C\x00\x52\x02\x00\x00\x02\x00\x02\x00\x02\x01\x7B\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x23\xAB",
 };
 
-static ssize_t
+static int
 applespi_sync(struct applespi_data *applespi, struct spi_message *message)
 {
 	struct spi_device *spi;
@@ -234,6 +234,19 @@ applespi_sync(struct applespi_data *applespi, struct spi_message *message)
 		status = message->actual_length;
 
 	return status;
+}
+
+static inline void
+applespi_check_write_status(struct applespi_data *applespi, int sts)
+{
+	u8 sts_ok[] = { 0xac, 0x27, 0x68, 0xd5 };
+
+	if (sts < 0)
+		pr_warn("Error writing to device: %d", sts);
+	else if (memcmp(applespi->tx_status, sts_ok, APPLESPI_STATUS_SIZE) != 0)
+		pr_warn("Error writing to device: %x %x %x %x",
+			applespi->tx_status[0], applespi->tx_status[1],
+			applespi->tx_status[2], applespi->tx_status[3]);
 }
 
 static inline ssize_t
@@ -263,13 +276,29 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 		.delay_usecs		= TXFR_DELAY,
 	};
 	struct spi_message      m;
+	ssize_t ret;
 
 	spi_message_init(&m);
 	spi_message_add_tail(&t1, &m);
 	spi_message_add_tail(&t2, &m);
 	spi_message_add_tail(&t3, &m);
 
-	return applespi_sync(applespi, &m);
+	ret = applespi_sync(applespi, &m);
+
+#ifdef DEBUG_ALL_WRITE
+	print_hex_dump(KERN_INFO, "applespi: write  ", DUMP_PREFIX_NONE,
+		       32, 1, applespi->tx_buffer, APPLESPI_PACKET_SIZE, false);
+	print_hex_dump(KERN_INFO, "applespi: status ", DUMP_PREFIX_NONE,
+		       32, 1, applespi->tx_status, APPLESPI_STATUS_SIZE, false);
+#endif
+#ifdef DEBUG_ALL_READ
+	print_hex_dump(KERN_INFO, "applespi: read  ", DUMP_PREFIX_NONE,
+		       32, 1, applespi->rx_buffer, APPLESPI_PACKET_SIZE, false);
+#endif
+
+	applespi_check_write_status(applespi, ret);
+
+	return ret;
 }
 
 static inline ssize_t
@@ -281,10 +310,21 @@ applespi_sync_read(struct applespi_data *applespi)
 		.delay_usecs		= TXFR_DELAY,
 	};
 	struct spi_message      m;
+	ssize_t ret;
 
 	spi_message_init(&m);
 	spi_message_add_tail(&t, &m);
-	return applespi_sync(applespi, &m);
+	ret = applespi_sync(applespi, &m);
+
+#ifdef DEBUG_ALL_READ
+	print_hex_dump(KERN_INFO, "applespi: read  ", DUMP_PREFIX_NONE,
+		       32, 1, applespi->rx_buffer, APPLESPI_PACKET_SIZE, false);
+#endif
+
+	if (ret < 0)
+		pr_warn("Error reading from device: %ld", ret);
+
+	return ret;
 }
 
 static int applespi_enable_spi(struct applespi_data *applespi)
@@ -475,7 +515,12 @@ applespi_got_data(struct applespi_data *applespi)
 static void applespi_async_read_complete(void *context)
 {
 	struct applespi_data *applespi = context;
-	applespi_got_data(applespi);
+
+	if (applespi->m.status < 0)
+		pr_warn("Error reading from device: %d", applespi->m.status);
+	else
+		applespi_got_data(applespi);
+
 #ifdef DEBUG_ALL_READ
 	print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, applespi->rx_buffer, 256, false);
 #endif
