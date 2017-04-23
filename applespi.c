@@ -263,6 +263,47 @@ u8 *applespi_init_commands[] = {
 
 u8 *applespi_caps_lock_led_cmd = "\x40\x01\x00\x00\x00\x00\x0C\x00\x51\x01\x00\x00\x02\x00\x02\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x66\x6a";
 
+static void
+applespi_setup_read_txfr(struct applespi_data *applespi,
+			 struct spi_transfer *rd_t)
+{
+	memset(rd_t, 0, sizeof *rd_t);
+
+	rd_t->rx_buf = applespi->rx_buffer;
+	rd_t->len = APPLESPI_PACKET_SIZE;
+	rd_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
+}
+
+static void
+applespi_setup_write_txfr(struct applespi_data *applespi,
+			  struct spi_transfer *wr_t, struct spi_transfer *st_t)
+{
+	memset(wr_t, 0, sizeof *wr_t);
+	memset(st_t, 0, sizeof *st_t);
+
+	wr_t->tx_buf = applespi->tx_buffer;
+	wr_t->len = APPLESPI_PACKET_SIZE;
+	wr_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
+
+	st_t->rx_buf = applespi->tx_status;
+	st_t->len = APPLESPI_STATUS_SIZE;
+	st_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
+}
+
+static void
+applespi_setup_spi_message(struct spi_message *message, int num_txfrs, ...)
+{
+	va_list txfrs;
+
+	spi_message_init(message);
+
+	va_start(txfrs, num_txfrs);
+	while (num_txfrs-- > 0)
+		spi_message_add_tail(va_arg(txfrs, struct spi_transfer *),
+				     message);
+	va_end(txfrs);
+}
+
 static int
 applespi_sync(struct applespi_data *applespi, struct spi_message *message)
 {
@@ -277,6 +318,16 @@ applespi_sync(struct applespi_data *applespi, struct spi_message *message)
 		status = message->actual_length;
 
 	return status;
+}
+
+static int
+applespi_async(struct applespi_data *applespi, struct spi_message *message,
+	       void (*complete)(void *))
+{
+	message->complete = complete;
+	message->context = applespi;
+
+	return spi_async(applespi->spi, message);
 }
 
 static inline void
@@ -300,31 +351,16 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 	by a 4 byte read with CS still the same, followed by a toggling of
 	CS and a 256 byte read for the real response.
 	*/
-	struct spi_transfer t1 = {
-		.tx_buf			= applespi->tx_buffer,
-		.len			= APPLESPI_PACKET_SIZE,
-		.delay_usecs		= applespi->spi_settings.spi_cs_delay,
-	};
-
-	struct spi_transfer t2 = {
-		.rx_buf			= applespi->tx_status,
-		.len			= APPLESPI_STATUS_SIZE,
-		.cs_change		= 1,
-		.delay_usecs		= applespi->spi_settings.spi_cs_delay,
-	};
-
-	struct spi_transfer t3 = {
-		.rx_buf			= applespi->rx_buffer,
-		.len			= APPLESPI_PACKET_SIZE,
-		.delay_usecs		= applespi->spi_settings.spi_cs_delay,
-	};
-	struct spi_message      m;
+	struct spi_transfer t1;
+	struct spi_transfer t2;
+	struct spi_transfer t3;
+	struct spi_message m;
 	ssize_t ret;
 
-	spi_message_init(&m);
-	spi_message_add_tail(&t1, &m);
-	spi_message_add_tail(&t2, &m);
-	spi_message_add_tail(&t3, &m);
+	applespi_setup_write_txfr(applespi, &t1, &t2);
+	t2.cs_change = 1;
+	applespi_setup_read_txfr(applespi, &t3);
+	applespi_setup_spi_message(&m, 3, &t1, &t2, &t3);
 
 	ret = applespi_sync(applespi, &m);
 
@@ -347,16 +383,13 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 static inline ssize_t
 applespi_sync_read(struct applespi_data *applespi)
 {
-	struct spi_transfer t = {
-		.rx_buf			= applespi->rx_buffer,
-		.len			= APPLESPI_PACKET_SIZE,
-		.delay_usecs		= applespi->spi_settings.spi_cs_delay,
-	};
-	struct spi_message      m;
+	struct spi_transfer t;
+	struct spi_message m;
 	ssize_t ret;
 
-	spi_message_init(&m);
-	spi_message_add_tail(&t, &m);
+	applespi_setup_read_txfr(applespi, &t);
+	applespi_setup_spi_message(&m, 1, &t);
+
 	ret = applespi_sync(applespi, &m);
 
 #ifdef DEBUG_ALL_READ
@@ -541,25 +574,12 @@ applespi_send_leds_cmd(struct applespi_data *applespi)
 	applespi->tx_buffer[19] = crc >> 8;
 
 	/* send command */
-	memset(&applespi->wr_t, 0, sizeof applespi->wr_t);
-	memset(&applespi->st_t, 0, sizeof applespi->st_t);
+	applespi_setup_write_txfr(applespi, &applespi->wr_t, &applespi->st_t);
+	applespi_setup_spi_message(&applespi->wr_m, 2, &applespi->wr_t,
+				   &applespi->st_t);
 
-	applespi->wr_t.tx_buf = applespi->tx_buffer;
-	applespi->wr_t.len = APPLESPI_PACKET_SIZE;
-	applespi->wr_t.delay_usecs = applespi->spi_settings.spi_cs_delay;
-
-	applespi->st_t.rx_buf = applespi->tx_status;
-	applespi->st_t.len = APPLESPI_STATUS_SIZE;
-	applespi->st_t.delay_usecs = applespi->spi_settings.spi_cs_delay;
-
-	spi_message_init(&applespi->wr_m);
-	applespi->wr_m.complete = applespi_async_write_complete;
-	applespi->wr_m.context = applespi;
-
-	spi_message_add_tail(&applespi->wr_t, &applespi->wr_m);
-	spi_message_add_tail(&applespi->st_t, &applespi->wr_m);
-
-	sts = spi_async(applespi->spi, &applespi->wr_m);
+	sts = applespi_async(applespi, &applespi->wr_m,
+			     applespi_async_write_complete);
 
 	if (sts != 0)
 		pr_warn("Error queueing async write to device: %d", sts);
@@ -757,30 +777,14 @@ static void applespi_async_read_complete(void *context)
 	acpi_finish_gpe(NULL, applespi->gpe);
 }
 
-static void
-applespi_async_init(struct applespi_data *applespi)
-{
-	memset(&applespi->rd_t, 0, sizeof applespi->rd_t);
-
-	applespi->rd_t.rx_buf = applespi->rx_buffer;
-	applespi->rd_t.len = APPLESPI_PACKET_SIZE;
-	applespi->rd_t.delay_usecs = applespi->spi_settings.spi_cs_delay;
-
-	spi_message_init(&applespi->rd_m);
-	applespi->rd_m.complete = applespi_async_read_complete;
-	applespi->rd_m.context = applespi;
-
-	spi_message_add_tail(&applespi->rd_t, &applespi->rd_m);
-}
-
 static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 {
 	struct applespi_data *applespi = context;
 
-	/* Can this be reused? */
-	applespi_async_init(applespi);
+	applespi_setup_read_txfr(applespi, &applespi->rd_t);
+	applespi_setup_spi_message(&applespi->rd_m, 1, &applespi->rd_t);
 
-	spi_async(applespi->spi, &applespi->rd_m);
+	applespi_async(applespi, &applespi->rd_m, applespi_async_read_complete);
 	return ACPI_INTERRUPT_HANDLED;
 }
 
