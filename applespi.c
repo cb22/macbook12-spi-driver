@@ -26,6 +26,8 @@
 #include <linux/property.h>
 #include <linux/delay.h>
 #include <linux/dmi.h>
+#include <linux/spinlock.h>
+#include <linux/crc16.h>
 
 #include <linux/input.h>
 #include <linux/input/mt.h>
@@ -148,8 +150,18 @@ struct applespi_data {
 	acpi_handle			sien;
 	acpi_handle			sist;
 
-	struct spi_transfer		t;
-	struct spi_message		m;
+	struct spi_transfer		rd_t;
+	struct spi_message		rd_m;
+
+	struct spi_transfer		wr_t;
+	struct spi_transfer		st_t;
+	struct spi_message		wr_m;
+
+	bool				want_cl_led_on;
+	bool				have_cl_led_on;
+	unsigned			led_msg_cntr;
+	spinlock_t			led_msg_lock;
+	bool				led_msg_queued;
 };
 
 static const unsigned char applespi_scancodes[] = {
@@ -248,6 +260,8 @@ static const struct dmi_system_id applespi_touchpad_infos[] = {
 u8 *applespi_init_commands[] = {
 	"\x40\x02\x00\x00\x00\x00\x0C\x00\x52\x02\x00\x00\x02\x00\x02\x00\x02\x01\x7B\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x23\xAB",
 };
+
+u8 *applespi_caps_lock_led_cmd = "\x40\x01\x00\x00\x00\x00\x0C\x00\x51\x01\x00\x00\x02\x00\x02\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x66\x6a";
 
 static int
 applespi_sync(struct applespi_data *applespi, struct spi_message *message)
@@ -429,7 +443,15 @@ static int applespi_get_spi_settings(struct applespi_data *applespi)
 
 static int applespi_setup_spi(struct applespi_data *applespi)
 {
-	return applespi_get_spi_settings(applespi);
+	int sts;
+
+	sts = applespi_get_spi_settings(applespi);
+	if (sts)
+		return sts;
+
+	spin_lock_init(&applespi->led_msg_lock);
+
+	return 0;
 }
 
 static int applespi_enable_spi(struct applespi_data *applespi)
@@ -474,6 +496,109 @@ static void applespi_init(struct applespi_data *applespi)
 	}
 
 	pr_info("modeswitch done.");
+}
+
+static int applespi_send_leds_cmd(struct applespi_data *applespi);
+
+static void applespi_async_write_complete(void *context)
+{
+	struct applespi_data *applespi = context;
+	unsigned long flags;
+
+	applespi_check_write_status(applespi, applespi->wr_m.status);
+
+	spin_lock_irqsave(&applespi->led_msg_lock, flags);
+
+	applespi->led_msg_queued = false;
+	applespi_send_leds_cmd(applespi);
+
+	spin_unlock_irqrestore(&applespi->led_msg_lock, flags);
+}
+
+static int
+applespi_send_leds_cmd(struct applespi_data *applespi)
+{
+	u16 crc;
+	int sts;
+
+	/* check whether send is needed and whether one is in progress */
+	if (applespi->want_cl_led_on == applespi->have_cl_led_on ||
+	    applespi->led_msg_queued) {
+		return 0;
+	}
+
+	applespi->have_cl_led_on = applespi->want_cl_led_on;
+
+	/* build led command buffer */
+	memcpy(applespi->tx_buffer, applespi_caps_lock_led_cmd,
+	       APPLESPI_PACKET_SIZE);
+
+	applespi->tx_buffer[11] = applespi->led_msg_cntr++ & 0xff;
+	applespi->tx_buffer[17] = applespi->have_cl_led_on ? 2 : 0;
+
+	crc = crc16(0, applespi->tx_buffer + 8, 10);
+	applespi->tx_buffer[18] = crc & 0xff;
+	applespi->tx_buffer[19] = crc >> 8;
+
+	/* send command */
+	memset(&applespi->wr_t, 0, sizeof applespi->wr_t);
+	memset(&applespi->st_t, 0, sizeof applespi->st_t);
+
+	applespi->wr_t.tx_buf = applespi->tx_buffer;
+	applespi->wr_t.len = APPLESPI_PACKET_SIZE;
+	applespi->wr_t.delay_usecs = applespi->spi_settings.spi_cs_delay;
+
+	applespi->st_t.rx_buf = applespi->tx_status;
+	applespi->st_t.len = APPLESPI_STATUS_SIZE;
+	applespi->st_t.delay_usecs = applespi->spi_settings.spi_cs_delay;
+
+	spi_message_init(&applespi->wr_m);
+	applespi->wr_m.complete = applespi_async_write_complete;
+	applespi->wr_m.context = applespi;
+
+	spi_message_add_tail(&applespi->wr_t, &applespi->wr_m);
+	spi_message_add_tail(&applespi->st_t, &applespi->wr_m);
+
+	sts = spi_async(applespi->spi, &applespi->wr_m);
+
+	if (sts != 0)
+		pr_warn("Error queueing async write to device: %d", sts);
+	else
+		applespi->led_msg_queued = true;
+
+	return sts;
+}
+
+static int
+applespi_set_leds(struct applespi_data *applespi, bool capslock_on)
+{
+	unsigned long flags;
+	int sts;
+
+	spin_lock_irqsave(&applespi->led_msg_lock, flags);
+
+	applespi->want_cl_led_on = capslock_on;
+	sts = applespi_send_leds_cmd(applespi);
+
+	spin_unlock_irqrestore(&applespi->led_msg_lock, flags);
+
+	return sts;
+}
+
+static int
+applespi_event(struct input_dev *dev, unsigned int type, unsigned int code,
+	       int value)
+{
+	struct applespi_data *applespi = input_get_drvdata(dev);
+
+	switch (type) {
+
+	case EV_LED:
+		applespi_set_leds(applespi, !!test_bit(LED_CAPSL, dev->led));
+		return 0;
+	}
+
+	return -1;
 }
 
 /* Lifted from the BCM5974 driver */
@@ -621,8 +746,8 @@ static void applespi_async_read_complete(void *context)
 {
 	struct applespi_data *applespi = context;
 
-	if (applespi->m.status < 0)
-		pr_warn("Error reading from device: %d", applespi->m.status);
+	if (applespi->rd_m.status < 0)
+		pr_warn("Error reading from device: %d", applespi->rd_m.status);
 	else
 		applespi_got_data(applespi);
 
@@ -635,17 +760,17 @@ static void applespi_async_read_complete(void *context)
 static void
 applespi_async_init(struct applespi_data *applespi)
 {
-	memset(&applespi->t, 0, sizeof applespi->t);
+	memset(&applespi->rd_t, 0, sizeof applespi->rd_t);
 
-	applespi->t.rx_buf = applespi->rx_buffer;
-	applespi->t.len = APPLESPI_PACKET_SIZE;
-	applespi->t.delay_usecs = applespi->spi_settings.spi_cs_delay;
+	applespi->rd_t.rx_buf = applespi->rx_buffer;
+	applespi->rd_t.len = APPLESPI_PACKET_SIZE;
+	applespi->rd_t.delay_usecs = applespi->spi_settings.spi_cs_delay;
 
-	spi_message_init(&applespi->m);
-	applespi->m.complete = applespi_async_read_complete;
-	applespi->m.context = applespi;
+	spi_message_init(&applespi->rd_m);
+	applespi->rd_m.complete = applespi_async_read_complete;
+	applespi->rd_m.context = applespi;
 
-	spi_message_add_tail(&applespi->t, &applespi->m);
+	spi_message_add_tail(&applespi->rd_t, &applespi->rd_m);
 }
 
 static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
@@ -655,7 +780,7 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 	/* Can this be reused? */
 	applespi_async_init(applespi);
 
-	spi_async(applespi->spi, &applespi->m);
+	spi_async(applespi->spi, &applespi->rd_m);
 	return ACPI_INTERRUPT_HANDLED;
 }
 
@@ -699,6 +824,9 @@ static int applespi_probe(struct spi_device *spi)
 
 	applespi->keyboard_input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_LED) | BIT_MASK(EV_REP);
 	applespi->keyboard_input_dev->ledbit[0] = BIT_MASK(LED_CAPSL);
+
+	input_set_drvdata(applespi->keyboard_input_dev, applespi);
+	applespi->keyboard_input_dev->event = applespi_event;
 
 	for (i = 0; i<ARRAY_SIZE(applespi_scancodes); i++)
 		if (applespi_scancodes[i])
