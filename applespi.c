@@ -336,9 +336,9 @@ applespi_check_write_status(struct applespi_data *applespi, int sts)
 	u8 sts_ok[] = { 0xac, 0x27, 0x68, 0xd5 };
 
 	if (sts < 0)
-		pr_warn("Error writing to device: %d", sts);
+		pr_warn("Error writing to device: %d\n", sts);
 	else if (memcmp(applespi->tx_status, sts_ok, APPLESPI_STATUS_SIZE) != 0)
-		pr_warn("Error writing to device: %x %x %x %x",
+		pr_warn("Error writing to device: %x %x %x %x\n",
 			applespi->tx_status[0], applespi->tx_status[1],
 			applespi->tx_status[2], applespi->tx_status[3]);
 }
@@ -398,7 +398,7 @@ applespi_sync_read(struct applespi_data *applespi)
 #endif
 
 	if (ret < 0)
-		pr_warn("Error reading from device: %ld", ret);
+		pr_warn("Error reading from device: %ld\n", ret);
 
 	return ret;
 }
@@ -429,12 +429,12 @@ static int applespi_get_spi_settings(struct applespi_data *applespi)
 
 	spi_info = acpi_evaluate_dsm(applespi->handle, uuid, 1, 1, NULL);
 	if (!spi_info) {
-		pr_err("Failed to get SPI info from _DSM method");
+		pr_err("Failed to get SPI info from _DSM method\n");
 		return -ENODEV;
 	}
 	if (spi_info->type != ACPI_TYPE_PACKAGE) {
-		pr_err("Unexpected data returned from SPI _DSM method: type=%d",
-		       spi_info->type);
+		pr_err("Unexpected data returned from SPI _DSM method: "
+		       "type=%d\n", spi_info->type);
 		ACPI_FREE(spi_info);
 		return -ENODEV;
 	}
@@ -451,14 +451,14 @@ static int applespi_get_spi_settings(struct applespi_data *applespi)
 		      value.type == ACPI_TYPE_BUFFER &&
 		      value.buffer.length == 8)) {
 			pr_warn("Unexpected data returned from SPI _DSM method:"
-			        " name.type=%d, value.type=%d", name.type,
+			        " name.type=%d, value.type=%d\n", name.type,
 				value.type);
 			continue;
 		}
 
 		field_off = applespi_find_settings_field(name.string.pointer);
 		if (field_off < 0) {
-			pr_debug("Skipping unknown SPI setting '%s'",
+			pr_debug("Skipping unknown SPI setting '%s'\n",
 				 name.string.pointer);
 			continue;
 		}
@@ -500,7 +500,7 @@ static int applespi_enable_spi(struct applespi_data *applespi)
 	/* SIEN(1) will enable SPI communication */
 	result = acpi_execute_simple_method(applespi->sien, NULL, 1);
 	if (ACPI_FAILURE(result)) {
-		pr_err("SIEN failed: %s", acpi_format_exception(result));
+		pr_err("SIEN failed: %s\n", acpi_format_exception(result));
 		return -ENODEV;
 	}
 
@@ -528,7 +528,7 @@ static void applespi_init(struct applespi_data *applespi)
 		applespi_sync_write_and_response(applespi);
 	}
 
-	pr_info("modeswitch done.");
+	pr_info("modeswitch done.\n");
 }
 
 static int applespi_send_leds_cmd(struct applespi_data *applespi);
@@ -582,7 +582,7 @@ applespi_send_leds_cmd(struct applespi_data *applespi)
 			     applespi_async_write_complete);
 
 	if (sts != 0)
-		pr_warn("Error queueing async write to device: %d", sts);
+		pr_warn("Error queueing async write to device: %d\n", sts);
 	else
 		applespi->led_msg_queued = true;
 
@@ -756,7 +756,7 @@ applespi_got_data(struct applespi_data *applespi)
 	}
 #ifdef DEBUG_UNKNOWN_PACKET
 	else {
-		pr_info("--- %d", keyboard_protocol.packet_type);
+		pr_info("--- %d\n", keyboard_protocol.packet_type);
 		print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, &keyboard_protocol, APPLESPI_PACKET_SIZE, false);
 	}
 #endif
@@ -767,7 +767,7 @@ static void applespi_async_read_complete(void *context)
 	struct applespi_data *applespi = context;
 
 	if (applespi->rd_m.status < 0)
-		pr_warn("Error reading from device: %d", applespi->rd_m.status);
+		pr_warn("Error reading from device: %d\n", applespi->rd_m.status);
 	else
 		applespi_got_data(applespi);
 
@@ -848,7 +848,8 @@ static int applespi_probe(struct spi_device *spi)
 
 	result = input_register_device(applespi->keyboard_input_dev);
 	if (result) {
-		pr_err("Unabled to register keyboard input device (%d)", result);
+		pr_err("Unabled to register keyboard input device (%d)\n",
+		       result);
 		return -ENODEV;
 	}
 
@@ -897,7 +898,8 @@ static int applespi_probe(struct spi_device *spi)
 
 	result = input_register_device(applespi->touchpad_input_dev);
 	if (result) {
-		pr_err("Unabled to register touchpad input device (%d)", result);
+		pr_err("Unabled to register touchpad input device (%d)\n",
+		       result);
 		return -ENODEV;
 	}
 
@@ -907,14 +909,14 @@ static int applespi_probe(struct spi_device *spi)
 	result = acpi_evaluate_integer(applespi->handle, "UIST", NULL, &usb_status);
 	if (ACPI_SUCCESS(result) && usb_status) {
 		/* Let the USB driver take over instead */
-		pr_info("USB interface already enabled");
+		pr_info("USB interface already enabled\n");
 		return -ENODEV;
 	}
 
 	/* Cache ACPI method handles */
 	if (ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIEN", &applespi->sien)) ||
 	    ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIST", &applespi->sist))) {
-		pr_err("Failed to get required ACPI method handle");
+		pr_err("Failed to get required ACPI method handle\n");
 		return -ENODEV;
 	}
 
@@ -936,25 +938,28 @@ static int applespi_probe(struct spi_device *spi)
 	 */
 	result = acpi_evaluate_integer(applespi->handle, "_GPE", NULL, &gpe);
 	if (ACPI_FAILURE(result)) {
-		pr_err("Failed to obtain GPE for SPI slave device: %s", acpi_format_exception(result));
+		pr_err("Failed to obtain GPE for SPI slave device: %s\n",
+		       acpi_format_exception(result));
 		return -ENODEV;
 	}
 	applespi->gpe = (int)gpe;
 
 	result = acpi_install_gpe_handler(NULL, applespi->gpe, ACPI_GPE_LEVEL_TRIGGERED, applespi_notify, applespi);
 	if (ACPI_FAILURE(result)) {
-		pr_err("Failed to install GPE handler for GPE %d: %s", applespi->gpe, acpi_format_exception(result));
+		pr_err("Failed to install GPE handler for GPE %d: %s\n",
+		       applespi->gpe, acpi_format_exception(result));
 		return -ENODEV;
 	}
 
 	result = acpi_enable_gpe(NULL, applespi->gpe);
 	if (ACPI_FAILURE(result)) {
-		pr_err("Failed to enable GPE handler for GPE %d: %s", applespi->gpe, acpi_format_exception(result));
+		pr_err("Failed to enable GPE handler for GPE %d: %s\n",
+		       applespi->gpe, acpi_format_exception(result));
 		acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
 		return -ENODEV;
 	}
 
-	pr_info("module probe done.");
+	pr_info("module probe done.\n");
 
 	return 0;
 }
@@ -966,14 +971,14 @@ static int applespi_remove(struct spi_device *spi)
 	acpi_disable_gpe(NULL, applespi->gpe);
 	acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
 
-	pr_info("module remove done.");
+	pr_info("module remove done.\n");
 	return 0;
 }
 
 #ifdef CONFIG_PM
 static int applespi_suspend(struct device *dev)
 {
-	pr_info("device suspend done.");
+	pr_info("device suspend done.\n");
 	return 0;
 }
 
@@ -988,7 +993,7 @@ static int applespi_resume(struct device *dev)
 	/* Switch the touchpad into multitouch mode */
 	applespi_init(applespi);
 
-	pr_info("device resume done.");
+	pr_info("device resume done.\n");
 
 	return 0;
 }
