@@ -1,10 +1,20 @@
 obj-m += applespi.o
 
+KVERSION := $(KERNELRELEASE)
+ifeq ($(origin KERNELRELEASE), undefined)
+KVERSION := $(shell uname -r)
+endif
+KDIR := /lib/modules/$(KVERSION)/build
+PWD := $(shell pwd)
+
 all:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
 clean:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+	$(MAKE) -C $(KDIR) M=$(PWD) clean
+
+install:
+	$(MAKE) -C $(KDIR) M=$(PWD) modules_install
 
 test: all
 	sync
