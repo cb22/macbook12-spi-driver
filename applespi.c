@@ -219,11 +219,13 @@ static const struct applespi_key_translation applespi_fn_codes[] = {
 	{ KEY_LEFT,	KEY_HOME },
 	{ KEY_DOWN,	KEY_PAGEDOWN },
 	{ KEY_UP,	KEY_PAGEUP },
+	{ },
 };
 
 static const struct applespi_key_translation apple_iso_keyboard[] = {
 	{ KEY_GRAVE,	KEY_102ND },
 	{ KEY_102ND,	KEY_GRAVE },
+	{ },
 };
 
 static u8 *acpi_dsm_uuid = "a0b5b7c6-1318-441c-b0c9-fe695eaf949b";
@@ -690,26 +692,35 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 	return 0;
 }
 
+static const struct applespi_key_translation*
+applespi_find_translation(const struct applespi_key_translation *table, u16 key)
+{
+	const struct applespi_key_translation *trans;
+
+	for (trans = table; trans->from; trans++)
+		if (trans->from == key)
+			return trans;
+
+	return NULL;
+}
+
 static unsigned int
 applespi_code_to_key(u8 code, int fn_pressed)
 {
-	int i;
 	unsigned int key = applespi_scancodes[code];
 
+	const struct applespi_key_translation *trans;
+
 	if (fn_pressed) {
-		for (i=0; i<ARRAY_SIZE(applespi_fn_codes); i++) {
-			if (applespi_fn_codes[i].from == key) {
-				return applespi_fn_codes[i].to;
-			}
-		}
+		trans = applespi_find_translation(applespi_fn_codes, key);
+		if (trans)
+			key = trans->to;
 	}
 
 	if (iso_layout) {
-		for (i=0; i<ARRAY_SIZE(apple_iso_keyboard); i++) {
-			if (apple_iso_keyboard[i].from == key) {
-				return apple_iso_keyboard[i].to;
-			}
-		}
+		trans = applespi_find_translation(apple_iso_keyboard, key);
+		if (trans)
+			key = trans->to;
 	}
 
 	return key;
