@@ -29,8 +29,8 @@ Known bugs:
 * You shouldn't have to modify your DSDT to get it running.
 * For some reason, doing operations at 8MHz (the speed that the slave device should run at) fail. 400kHz works, but this should be investigated.
 
-Interupts:
-----------
+Interrupts:
+-----------
 Interrupts are now working! This means that the driver is no longer polled, and should no longer be a massive battery drain. For more information on how the driver receives interrupts, see the discussion [here](https://github.com/cb22/macbook12-spi-driver/pull/1)
 
 Touchpad:
