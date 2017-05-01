@@ -53,15 +53,15 @@
 
 
 static int appletb_tb_def_idle_timeout = 5*60;
-module_param_named(default_idle_timeout, appletb_tb_def_idle_timeout, int, 0444);
+module_param_named(idle_timeout, appletb_tb_def_idle_timeout, int, 0444);
 MODULE_PARM_DESC(idle_timeout, "Default touchbar idle timeout (in seconds); "
 			       "0 disables touchbar, -1 disables timeout");
 
 static int appletb_tb_def_fn_mode = APPLETB_FN_MODE_NORM;
-module_param_named(default_fn_mode, appletb_tb_def_fn_mode, int, 0444);
-MODULE_PARM_DESC(fn_mode, "Default FN key mode: 0 = f-keys only, 1 = fn key "
-			  "switches from special to f-keys, 2 = inverse of 1, "
-			  "3 = special keys only");
+module_param_named(fnmode, appletb_tb_def_fn_mode, int, 0444);
+MODULE_PARM_DESC(fnmode, "Default FN key mode: 0 = f-keys only, 1 = fn key "
+			 "switches from special to f-keys, 2 = inverse of 1, "
+			 "3 = special keys only");
 
 
 static ssize_t idle_timeout_show(struct device *dev, struct device_attribute *attr,
@@ -70,15 +70,15 @@ static ssize_t idle_timeout_store(struct device *dev, struct device_attribute *a
 				  const char *buf, size_t size);
 static DEVICE_ATTR_RW(idle_timeout);
 
-static ssize_t fn_mode_show(struct device *dev, struct device_attribute *attr,
-				 char *buf);
-static ssize_t fn_mode_store(struct device *dev, struct device_attribute *attr,
-				  const char *buf, size_t size);
-static DEVICE_ATTR_RW(fn_mode);
+static ssize_t fnmode_show(struct device *dev, struct device_attribute *attr,
+			   char *buf);
+static ssize_t fnmode_store(struct device *dev, struct device_attribute *attr,
+			    const char *buf, size_t size);
+static DEVICE_ATTR_RW(fnmode);
 
 static struct attribute *appletb_attrs[] = {
 	&dev_attr_idle_timeout.attr,
-	&dev_attr_fn_mode.attr,
+	&dev_attr_fnmode.attr,
 	NULL,
 };
 
@@ -471,15 +471,15 @@ static ssize_t idle_timeout_store(struct device *dev, struct device_attribute *a
 	return size;
 }
 
-static ssize_t fn_mode_show(struct device *dev, struct device_attribute *attr,
-			    char *buf)
+static ssize_t fnmode_show(struct device *dev, struct device_attribute *attr,
+			   char *buf)
 {
 	struct appletb_data *tb_data = dev_get_drvdata(dev);
 	return snprintf(buf, PAGE_SIZE, "%d\n", tb_data->fn_mode);
 }
 
-static ssize_t fn_mode_store(struct device *dev, struct device_attribute *attr,
-			     const char *buf, size_t size)
+static ssize_t fnmode_store(struct device *dev, struct device_attribute *attr,
+			    const char *buf, size_t size)
 {
 	struct appletb_data *tb_data = dev_get_drvdata(dev);
 	char *end;
