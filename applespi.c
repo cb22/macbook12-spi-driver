@@ -45,6 +45,13 @@
 #define MAX_FINGERS		6
 #define MAX_FINGER_ORIENTATION	16384
 
+#define APPLE_FLAG_FKEY		0x01
+
+static unsigned int fnmode = 1;
+module_param(fnmode, uint, 0644);
+MODULE_PARM_DESC(fnmode, "Mode of fn key on Apple keyboards (0 = disabled, "
+		"[1] = fkeyslast, 2 = fkeysfirst)");
+
 static unsigned int iso_layout = 1;
 module_param(iso_layout, uint, 0644);
 MODULE_PARM_DESC(iso_layout, "Enable/Disable hardcoded ISO-layout of the keyboard. "
@@ -198,32 +205,35 @@ static const unsigned char applespi_controlcodes[] = {
 struct applespi_key_translation {
 	u16 from;
 	u16 to;
+	u8 flags;
 };
 
 static const struct applespi_key_translation applespi_fn_codes[] = {
 	{ KEY_BACKSPACE, KEY_DELETE },
 	{ KEY_ENTER,	KEY_INSERT },
-	{ KEY_F1,	KEY_BRIGHTNESSDOWN },
-	{ KEY_F2,	KEY_BRIGHTNESSUP },
-	{ KEY_F3,	KEY_SCALE },
-	{ KEY_F4,	KEY_DASHBOARD },
-	{ KEY_F5,	KEY_KBDILLUMDOWN },
-	{ KEY_F6,	KEY_KBDILLUMUP },
-	{ KEY_F7,	KEY_PREVIOUSSONG },
-	{ KEY_F8,	KEY_PLAYPAUSE },
-	{ KEY_F9,	KEY_NEXTSONG },
-	{ KEY_F10,	KEY_MUTE },
-	{ KEY_F11,	KEY_VOLUMEDOWN },
-	{ KEY_F12,	KEY_VOLUMEUP },
+	{ KEY_F1,	KEY_BRIGHTNESSDOWN, APPLE_FLAG_FKEY },
+	{ KEY_F2,	KEY_BRIGHTNESSUP,   APPLE_FLAG_FKEY },
+	{ KEY_F3,	KEY_SCALE,          APPLE_FLAG_FKEY },
+	{ KEY_F4,	KEY_DASHBOARD,      APPLE_FLAG_FKEY },
+	{ KEY_F5,	KEY_KBDILLUMDOWN,   APPLE_FLAG_FKEY },
+	{ KEY_F6,	KEY_KBDILLUMUP,     APPLE_FLAG_FKEY },
+	{ KEY_F7,	KEY_PREVIOUSSONG,   APPLE_FLAG_FKEY },
+	{ KEY_F8,	KEY_PLAYPAUSE,      APPLE_FLAG_FKEY },
+	{ KEY_F9,	KEY_NEXTSONG,       APPLE_FLAG_FKEY },
+	{ KEY_F10,	KEY_MUTE,           APPLE_FLAG_FKEY },
+	{ KEY_F11,	KEY_VOLUMEDOWN,     APPLE_FLAG_FKEY },
+	{ KEY_F12,	KEY_VOLUMEUP,       APPLE_FLAG_FKEY },
 	{ KEY_RIGHT,	KEY_END },
 	{ KEY_LEFT,	KEY_HOME },
 	{ KEY_DOWN,	KEY_PAGEDOWN },
 	{ KEY_UP,	KEY_PAGEUP },
+	{ },
 };
 
 static const struct applespi_key_translation apple_iso_keyboard[] = {
 	{ KEY_GRAVE,	KEY_102ND },
 	{ KEY_102ND,	KEY_GRAVE },
+	{ },
 };
 
 static u8 *acpi_dsm_uuid = "a0b5b7c6-1318-441c-b0c9-fe695eaf949b";
@@ -690,26 +700,45 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 	return 0;
 }
 
+static const struct applespi_key_translation*
+applespi_find_translation(const struct applespi_key_translation *table, u16 key)
+{
+	const struct applespi_key_translation *trans;
+
+	for (trans = table; trans->from; trans++)
+		if (trans->from == key)
+			return trans;
+
+	return NULL;
+}
+
 static unsigned int
 applespi_code_to_key(u8 code, int fn_pressed)
 {
-	int i;
 	unsigned int key = applespi_scancodes[code];
 
-	if (fn_pressed) {
-		for (i=0; i<ARRAY_SIZE(applespi_fn_codes); i++) {
-			if (applespi_fn_codes[i].from == key) {
-				return applespi_fn_codes[i].to;
-			}
+	const struct applespi_key_translation *trans;
+
+	if (fnmode) {
+		int do_translate;
+
+		trans = applespi_find_translation(applespi_fn_codes, key);
+		if (trans) {
+			if (trans->flags & APPLE_FLAG_FKEY)
+				do_translate = (fnmode == 2 && fn_pressed) ||
+					(fnmode == 1 && !fn_pressed);
+			else
+				do_translate = fn_pressed;
+
+			if (do_translate)
+				key = trans->to;
 		}
 	}
 
 	if (iso_layout) {
-		for (i=0; i<ARRAY_SIZE(apple_iso_keyboard); i++) {
-			if (apple_iso_keyboard[i].from == key) {
-				return apple_iso_keyboard[i].to;
-			}
-		}
+		trans = applespi_find_translation(apple_iso_keyboard, key);
+		if (trans)
+			key = trans->to;
 	}
 
 	return key;
