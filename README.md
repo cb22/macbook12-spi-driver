@@ -27,7 +27,6 @@ Known bugs:
 -----------
 * Occasionally, the SPI device can get itself into a state where it causes an interrupt storm. There should be a way of resetting it, or better yet avoiding this state altogether.
 * You shouldn't have to modify your DSDT to get it running.
-* For some reason, doing operations at 8MHz (the speed that the slave device should run at) fail. 400kHz works, but this should be investigated.
 
 Interrupts:
 -----------
