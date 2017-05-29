@@ -1028,7 +1028,7 @@ static int applespi_probe(struct spi_device *spi)
 		return -ENODEV;
 	}
 
-	pr_info("module probe done.\n");
+	pr_info("spi-device probe done: %s\n", dev_name(&spi->dev));
 
 	return 0;
 }
@@ -1040,14 +1040,14 @@ static int applespi_remove(struct spi_device *spi)
 	acpi_disable_gpe(NULL, applespi->gpe);
 	acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
 
-	pr_info("module remove done.\n");
+	pr_info("spi-device remove done: %s\n", dev_name(&spi->dev));
 	return 0;
 }
 
 #ifdef CONFIG_PM
 static int applespi_suspend(struct device *dev)
 {
-	pr_info("device suspend done.\n");
+	pr_info("spi-device suspend done.\n");
 	return 0;
 }
 
@@ -1062,7 +1062,7 @@ static int applespi_resume(struct device *dev)
 	/* Switch the touchpad into multitouch mode */
 	applespi_init(applespi);
 
-	pr_info("device resume done.\n");
+	pr_info("spi-device resume done.\n");
 
 	return 0;
 }
@@ -1282,6 +1282,9 @@ static int appleacpi_spi_master_added(struct device *dev,
 	struct appleacpi_spi_registration_info *info =
 		container_of(cif, struct appleacpi_spi_registration_info, cif);
 
+	pr_debug("New spi-master device with bus-number %d was added\n",
+		 spi_master->bus_num);
+
 	if (spi_master->bus_num != info->bus_num)
 		return 0;
 
@@ -1307,6 +1310,9 @@ static int appleacpi_spi_slave_changed(struct notifier_block *nb,
 		container_of(nb, struct appleacpi_spi_registration_info,
 			     slave_notifier);
 	struct spi_device *spi = data;
+
+	pr_debug("SPI slave device changed: action=%lu, dev=%s\n",
+		 action, dev_name(&spi->dev));
 
 	switch (action) {
 	case BUS_NOTIFY_DEL_DEVICE:
@@ -1348,6 +1354,10 @@ static int appleacpi_probe(struct acpi_device *adev)
 	struct appleacpi_spi_registration_info *reg_info;
 	int bus_num;
 	int ret;
+
+	pr_debug("Probing acpi-device %s: bus-id='%s', adr=%lu, uid='%s'\n",
+		 acpi_device_hid(adev), acpi_device_bid(adev),
+		 acpi_device_adr(adev), acpi_device_uid(adev));
 
 	ret = spi_register_driver(&applespi_driver);
 	if (ret) {
@@ -1415,7 +1425,12 @@ static int appleacpi_probe(struct acpi_device *adev)
 			pr_info("No spi-master device found for bus-number %d "
 				"- waiting for it to be registered\n", bus_num);
 		}
+	} else {
+		pr_warn("Non-numeric unique-id '%s' found on acpi-device %s",
+			acpi_device_uid(adev), acpi_device_hid(adev));
 	}
+
+	pr_info("acpi-device probe done: %s\n", acpi_device_hid(adev));
 
 	return 0;
 
@@ -1445,6 +1460,8 @@ static int appleacpi_remove(struct acpi_device *adev)
 	}
 
 	spi_unregister_driver(&applespi_driver);
+
+	pr_info("acpi-device remove done: %s\n", acpi_device_hid(adev));
 
 	return 0;
 }
