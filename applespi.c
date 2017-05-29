@@ -112,7 +112,7 @@ struct spi_settings {
 	u64	spi_spo;        	/* clock polarity: 0 = low, 1 = high */
 	u64	spi_sph;		/* clock phase: 0 = first, 1 = second */
 	u64	spi_cs_delay;    	/* in 10us (?) */
-	u64	reset_a2r_usec;  	/* ? (cur val: 10) */
+	u64	reset_a2r_usec;  	/* active-to-receive delay? */
 	u64	reset_rec_usec;  	/* ? (cur val: 10) */
 };
 
@@ -161,6 +161,7 @@ struct applespi_data {
 	acpi_handle			sien;
 	acpi_handle			sist;
 
+	struct spi_transfer		dl_t;
 	struct spi_transfer		rd_t;
 	struct spi_message		rd_m;
 
@@ -829,8 +830,10 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 {
 	struct applespi_data *applespi = context;
 
+	memset(&applespi->dl_t, 0, sizeof(applespi->dl_t));
+	applespi->dl_t.delay_usecs = applespi->spi_settings.reset_a2r_usec;
 	applespi_setup_read_txfr(applespi, &applespi->rd_t);
-	applespi_setup_spi_message(&applespi->rd_m, 1, &applespi->rd_t);
+	applespi_setup_spi_message(&applespi->rd_m, 2, &applespi->dl_t, &applespi->rd_t);
 
 	applespi_async(applespi, &applespi->rd_m, applespi_async_read_complete);
 	return ACPI_INTERRUPT_HANDLED;
