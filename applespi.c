@@ -30,6 +30,7 @@
 #include <linux/crc16.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
+#include <linux/notifier.h>
 
 #include <linux/input.h>
 #include <linux/input/mt.h>
@@ -117,6 +118,7 @@ struct appleacpi_spi_registration_info {
 	int			bus_num;
 	struct spi_master	*spi_master;
 	struct work_struct	work;
+	struct notifier_block	slave_notifier;
 };
 
 struct spi_settings {
@@ -1272,8 +1274,8 @@ static void appleacpi_dev_registration_worker(struct work_struct *work)
 /*
  * Callback for whenever a new master spi device is added.
  */
-static int appleacpi_wait_for_spi_master(struct device *dev,
-					 struct class_interface *cif)
+static int appleacpi_spi_master_added(struct device *dev,
+				      struct class_interface *cif)
 {
 	struct spi_master *spi_master =
 		container_of(dev, struct spi_master, dev);
@@ -1293,6 +1295,32 @@ static int appleacpi_wait_for_spi_master(struct device *dev,
 	schedule_work(&info->work);
 
 	return 0;
+}
+
+/*
+ * Callback for whenever a slave spi device is added or removed.
+ */
+static int appleacpi_spi_slave_changed(struct notifier_block *nb,
+                                       unsigned long action, void *data)
+{
+	struct appleacpi_spi_registration_info *info =
+		container_of(nb, struct appleacpi_spi_registration_info,
+			     slave_notifier);
+	struct spi_device *spi = data;
+
+	switch (action) {
+	case BUS_NOTIFY_DEL_DEVICE:
+		if (spi == info->spi) {
+			info->spi = NULL;
+			return NOTIFY_OK;
+		}
+		break;
+
+	default:
+		break;
+	}
+
+	return NOTIFY_DONE;
 }
 
 /*
@@ -1317,7 +1345,6 @@ static struct class *appleacpi_get_spi_master_class(void)
 
 static int appleacpi_probe(struct acpi_device *adev)
 {
-	struct spi_master *spi_master;
 	struct appleacpi_spi_registration_info *reg_info;
 	int bus_num;
 	int ret;
@@ -1328,21 +1355,8 @@ static int appleacpi_probe(struct acpi_device *adev)
 		return ret;
 	}
 
-	if (adev->pnp.unique_id &&
-	    !kstrtouint(adev->pnp.unique_id, 0, &bus_num)) {
-		reg_info = kzalloc(sizeof(*reg_info), GFP_KERNEL);
-		if (!reg_info) {
-			pr_err("Failed to allocate registration-info\n");
-			ret = -ENOMEM;
-			goto unregister;
-		}
-
-		reg_info->bus_num = bus_num;
-		reg_info->adev = adev;
-		INIT_WORK(&reg_info->work, appleacpi_dev_registration_worker);
-
-		adev->driver_data = reg_info;
-
+	if (acpi_device_uid(adev) &&
+	    !kstrtouint(acpi_device_uid(adev), 0, &bus_num)) {
 		/*
 		 * Ideally we would just call spi_register_board_info() here,
 		 * but that function is not exported. Additionally, we need to
@@ -1352,34 +1366,65 @@ static int appleacpi_probe(struct acpi_device *adev)
 		 * has been registered already, and if not jump through some
 		 * hoops to make sure we are notified when it does.
 		 */
-		spi_master = spi_busnum_to_master(bus_num);
-		if (spi_master) {
-			ret = appleacpi_register_spi_device(spi_master, adev);
-			if (ret)
-				goto free_reg_info;
-		} else {
+
+		reg_info = kzalloc(sizeof(*reg_info), GFP_KERNEL);
+		if (!reg_info) {
+			pr_err("Failed to allocate registration-info\n");
+			ret = -ENOMEM;
+			goto unregister_driver;
+		}
+
+		reg_info->bus_num = bus_num;
+		reg_info->adev = adev;
+		INIT_WORK(&reg_info->work, appleacpi_dev_registration_worker);
+
+		adev->driver_data = reg_info;
+
+		/*
+		 * Set up listening for spi slave removals so we can properly
+		 * handle them.
+		 */
+		reg_info->slave_notifier.notifier_call =
+			appleacpi_spi_slave_changed;
+		ret = bus_register_notifier(&spi_bus_type,
+					    &reg_info->slave_notifier);
+		if (ret) {
+			pr_err("Failed to register notifier for spi slaves: "
+			       "%d\n", ret);
+			goto free_reg_info;
+		}
+
+		/*
+		 * Listen for additions of spi-master devices so we can
+		 * register our spi device when the relevant master is added.
+		 * Note that our callback gets called immediately for all
+		 * existing master devices, so this takes care of registration
+		 * when the master already exists too.
+		 */
+		reg_info->cif.class = appleacpi_get_spi_master_class();
+		reg_info->cif.add_dev = appleacpi_spi_master_added;
+
+		ret = class_interface_register(&reg_info->cif);
+		if (ret) {
+			pr_err("Failed to register watcher for "
+			       "spi-master: %d\n", ret);
+			goto unregister_notifier;
+		}
+
+		if (!spi_busnum_to_master(bus_num)) {
 			pr_info("No spi-master device found for bus-number %d "
 				"- waiting for it to be registered\n", bus_num);
-
-			reg_info->cif.class = appleacpi_get_spi_master_class();
-			reg_info->cif.add_dev = appleacpi_wait_for_spi_master;
-
-			ret = class_interface_register(&reg_info->cif);
-			if (ret) {
-				pr_err("Failed to register watcher for "
-				       "spi-master: %d\n", ret);
-				goto free_reg_info;
-			}
-
 		}
 	}
 
 	return 0;
 
+unregister_notifier:
+	bus_unregister_notifier(&spi_bus_type, &reg_info->slave_notifier);
 free_reg_info:
 	adev->driver_data = NULL;
 	kfree(reg_info);
-unregister:
+unregister_driver:
 	spi_unregister_driver(&applespi_driver);
 	return ret;
 }
@@ -1391,6 +1436,8 @@ static int appleacpi_remove(struct acpi_device *adev)
 	reg_info = acpi_driver_data(adev);
 	if (reg_info) {
 		class_interface_unregister(&reg_info->cif);
+		bus_unregister_notifier(&spi_bus_type,
+					&reg_info->slave_notifier);
 		cancel_work_sync(&reg_info->work);
 		if (reg_info->spi)
 			spi_unregister_device(reg_info->spi);
