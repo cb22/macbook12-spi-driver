@@ -57,6 +57,12 @@ module_param_named(idle_timeout, appletb_tb_def_idle_timeout, int, 0444);
 MODULE_PARM_DESC(idle_timeout, "Default touchbar idle timeout (in seconds); "
 			       "0 disables touchbar, -1 disables timeout");
 
+static int appletb_tb_def_dim_timeout = -2;
+module_param_named(dim_timeout, appletb_tb_def_dim_timeout, int, 0444);
+MODULE_PARM_DESC(dim_timeout, "Default touchbar dim timeout (in seconds); "
+			      "0 means always dimmmed, -1 disables dimming, "
+			      "-2 calculates timeout based on idle-timeout");
+
 static int appletb_tb_def_fn_mode = APPLETB_FN_MODE_NORM;
 module_param_named(fnmode, appletb_tb_def_fn_mode, int, 0444);
 MODULE_PARM_DESC(fnmode, "Default FN key mode: 0 = f-keys only, 1 = fn key "
@@ -70,6 +76,12 @@ static ssize_t idle_timeout_store(struct device *dev, struct device_attribute *a
 				  const char *buf, size_t size);
 static DEVICE_ATTR_RW(idle_timeout);
 
+static ssize_t dim_timeout_show(struct device *dev, struct device_attribute *attr,
+				char *buf);
+static ssize_t dim_timeout_store(struct device *dev, struct device_attribute *attr,
+				 const char *buf, size_t size);
+static DEVICE_ATTR_RW(dim_timeout);
+
 static ssize_t fnmode_show(struct device *dev, struct device_attribute *attr,
 			   char *buf);
 static ssize_t fnmode_store(struct device *dev, struct device_attribute *attr,
@@ -78,6 +90,7 @@ static DEVICE_ATTR_RW(fnmode);
 
 static struct attribute *appletb_attrs[] = {
 	&dev_attr_idle_timeout.attr,
+	&dev_attr_dim_timeout.attr,
 	&dev_attr_fnmode.attr,
 	NULL,
 };
@@ -111,6 +124,7 @@ struct appletb_data {
 
 	int			dim_timeout;
 	int			idle_timeout;
+	bool			dim_to_is_calc;
 	int			fn_mode;
 };
 
@@ -250,7 +264,7 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 {
 	struct appletb_data *tb_data =
 		container_of(work, struct appletb_data, tb_mode_work.work);
-	s64 time_left, next_timeout;
+	s64 time_left, min_timeout, time_to_off;
 	unsigned char pending_mode;
 	unsigned char pending_disp;
 	unsigned char current_disp;
@@ -294,23 +308,27 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	current_disp = tb_data->cur_tb_disp;
 
 	/* calculate time left to next timeout */
-	next_timeout = (tb_data->dim_timeout > 0) ? tb_data->dim_timeout :
-						    tb_data->idle_timeout;
+	if (tb_data->idle_timeout <= 0 && tb_data->dim_timeout <= 0)
+		min_timeout = -1;
+	else if (tb_data->dim_timeout <= 0)
+		min_timeout = tb_data->idle_timeout;
+	else if (tb_data->idle_timeout <= 0)
+		min_timeout = tb_data->dim_timeout;
+	else
+		min_timeout = min(tb_data->dim_timeout, tb_data->idle_timeout);
 
-	if (pending_mode != APPLETB_CMD_MODE_NONE ||
-	    pending_disp != APPLETB_CMD_DISP_NONE) {
-		time_left = next_timeout;
-	} else {
-		s64 idle_time = (
-			ktime_ms_delta(ktime_get(), tb_data->last_event_time) +
-			500) / 1000;
+	if (min_timeout > 0) {
+		s64 idle_time =
+			(ktime_ms_delta(ktime_get(), tb_data->last_event_time) +
+			 500) / 1000;
 
-		if (idle_time >= tb_data->idle_timeout)
-			time_left = 0;
-		else if (idle_time >= next_timeout)
-			time_left = idle_time - tb_data->idle_timeout;
+		time_left = max(min_timeout - idle_time, 0LL);
+		if (tb_data->idle_timeout <= 0)
+			time_to_off = -1;
+		else if (idle_time >= tb_data->idle_timeout)
+			time_to_off = 0;
 		else
-			time_left = next_timeout - idle_time;
+			time_to_off = tb_data->idle_timeout - idle_time;
 	}
 
 	any_tb_key_pressed = appletb_any_tb_key_pressed(tb_data);
@@ -323,11 +341,11 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 		return;
 	}
 
-	/* if no idle timeout, we're done */
-	if (tb_data->idle_timeout <= 0)
+	/* if no idle/dim timeout, we're done */
+	if (min_timeout <= 0)
 		return;
 
-	/* manage idle timeout */
+	/* manage idle/dim timeout */
 	if (time_left > 0) {
 		/* we fired too soon or had a mode-change- re-schedule */
 		schedule_delayed_work(&tb_data->tb_mode_work,
@@ -335,11 +353,11 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	} else if (any_tb_key_pressed) {
 		/* keys are still pressed - re-schedule */
 		schedule_delayed_work(&tb_data->tb_mode_work,
-				      msecs_to_jiffies(next_timeout * 1000));
+				      msecs_to_jiffies(min_timeout * 1000));
 	} else {
 		/* dim or idle timeout reached */
-		int next_disp = (time_left < 0) ? APPLETB_CMD_DISP_DIM :
-						  APPLETB_CMD_DISP_OFF;
+		int next_disp = (time_to_off == 0) ? APPLETB_CMD_DISP_OFF :
+						     APPLETB_CMD_DISP_DIM;
 		if (next_disp != current_disp &&
 		    appletb_set_tb_disp(tb_data, next_disp) == 0) {
 			spin_lock(&tb_data->tb_mode_lock);
@@ -347,10 +365,9 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 			spin_unlock(&tb_data->tb_mode_lock);
 		}
 
-		if (next_disp == APPLETB_CMD_DISP_DIM) {
+		if (time_to_off > 0)
 			schedule_delayed_work(&tb_data->tb_mode_work,
-				      msecs_to_jiffies(-time_left * 1000));
-		}
+					msecs_to_jiffies(time_to_off * 1000));
 	}
 }
 
@@ -468,7 +485,8 @@ static void appletb_update_touchbar(struct appletb_data *tb_data, bool force)
 static void appletb_set_idle_timeout(struct appletb_data *tb_data, int new)
 {
 	tb_data->idle_timeout = new;
-	tb_data->dim_timeout = new - min(APPLETB_MAX_DIM_TIME, new / 3);
+	if (tb_data->dim_to_is_calc)
+		tb_data->dim_timeout = new - min(APPLETB_MAX_DIM_TIME, new / 3);
 }
 
 static ssize_t idle_timeout_show(struct device *dev, struct device_attribute *attr,
@@ -490,6 +508,42 @@ static ssize_t idle_timeout_store(struct device *dev, struct device_attribute *a
 		return -EINVAL;
 
 	appletb_set_idle_timeout(tb_data, new);
+	appletb_update_touchbar(tb_data, true);
+
+	return size;
+}
+
+static void appletb_set_dim_timeout(struct appletb_data *tb_data, int new)
+{
+	if (new == -2) {
+		tb_data->dim_to_is_calc = true;
+		appletb_set_idle_timeout(tb_data, tb_data->idle_timeout);
+	} else {
+		tb_data->dim_to_is_calc = false;
+		tb_data->dim_timeout = new;
+	}
+}
+
+static ssize_t dim_timeout_show(struct device *dev, struct device_attribute *attr,
+				char *buf)
+{
+	struct appletb_data *tb_data = dev_get_drvdata(dev);
+	return snprintf(buf, PAGE_SIZE, "%d\n",
+			tb_data->dim_to_is_calc ? -2 : tb_data->dim_timeout);
+}
+
+static ssize_t dim_timeout_store(struct device *dev, struct device_attribute *attr,
+				 const char *buf, size_t size)
+{
+	struct appletb_data *tb_data = dev_get_drvdata(dev);
+	char *end;
+	long new;
+
+	new = simple_strtol(buf, &end, 0);
+	if (end == buf || new > INT_MAX || new < -2)
+		return -EINVAL;
+
+	appletb_set_dim_timeout(tb_data, new);
 	appletb_update_touchbar(tb_data, true);
 
 	return size;
@@ -768,6 +822,7 @@ static int appletb_probe(struct hid_device *hdev, const struct hid_device_id *id
 	else
 		tb_data->fn_mode = APPLETB_FN_MODE_NORM;
 	appletb_set_idle_timeout(tb_data, appletb_tb_def_idle_timeout);
+	appletb_set_dim_timeout(tb_data, appletb_tb_def_dim_timeout);
 	tb_data->last_event_time = ktime_get();
 
 	tb_data->cur_tb_mode = APPLETB_CMD_MODE_OFF;
