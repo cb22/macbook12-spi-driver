@@ -301,9 +301,9 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	    pending_disp != APPLETB_CMD_DISP_NONE) {
 		time_left = next_timeout;
 	} else {
-		s64 idle_time =
-			ktime_ms_delta(ktime_get(), tb_data->last_event_time) /
-			1000;
+		s64 idle_time = (
+			ktime_ms_delta(ktime_get(), tb_data->last_event_time) +
+			500) / 1000;
 
 		if (idle_time >= tb_data->idle_timeout)
 			time_left = 0;
