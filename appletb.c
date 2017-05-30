@@ -408,14 +408,24 @@ static void appletb_update_touchbar_no_lock(struct appletb_data *tb_data,
 	unsigned char want_disp;
 	bool need_update = false;
 
-	/* calculate the new modes */
-	want_mode = appletb_get_fn_tb_mode(tb_data);
-	want_disp = tb_data->dim_timeout > 0 ? APPLETB_CMD_DISP_ON :
-					       APPLETB_CMD_DISP_DIM;
-
+	/*
+	 * calculate the new modes:
+	 *   idle_timeout:
+	 *     -1  always on
+	 *      0  always off
+	 *     >0  turn off after idle_timeout seconds
+	 *   dim_timeout (only valid if idle_timeout != 0):
+	 *     -1  never dimmed
+	 *      0  always dimmed
+	 *     >0  dim off after dim_timeout seconds
+	 */
 	if (tb_data->idle_timeout == 0) {
 		want_mode = APPLETB_CMD_MODE_OFF;
 		want_disp = APPLETB_CMD_DISP_OFF;
+	} else {
+		want_mode = appletb_get_fn_tb_mode(tb_data);
+		want_disp = tb_data->dim_timeout == 0 ? APPLETB_CMD_DISP_DIM :
+							APPLETB_CMD_DISP_ON;
 	}
 
 	/* see if we need to update the touchbar, taking into account that we
