@@ -141,6 +141,7 @@ static int appletb_send_usb_ctrl_req(struct usb_interface *iface,
 {
 	void *buffer;
 	struct usb_device *dev = interface_to_usbdev(iface);
+	int tries = 0;
 	int rc;
 
 	buffer = kmalloc(size, GFP_KERNEL);
@@ -149,8 +150,15 @@ static int appletb_send_usb_ctrl_req(struct usb_interface *iface,
 
 	memcpy(buffer, data, size);
 
-	rc = usb_control_msg(dev, usb_sndctrlpipe(dev, ep), request,
-			     requesttype, value, index, buffer, size, 2000);
+	do {
+		rc = usb_control_msg(dev, usb_sndctrlpipe(dev, ep), request,
+				     requesttype, value, index, buffer, size,
+				     2000);
+		if (rc != -EPIPE)
+			break;
+
+		usleep_range(1000 << tries, 3000 << tries);
+	} while (++tries < 5);
 
 	kfree(buffer);
 
@@ -245,8 +253,9 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	s64 time_left, next_timeout;
 	unsigned char pending_mode;
 	unsigned char pending_disp;
+	unsigned char current_disp;
 	bool any_tb_key_pressed, need_reschedule;
-	int rc1 = 1, rc2 = 1;
+	int rc1 = 0, rc2 = 0;
 
 	spin_lock(&tb_data->tb_mode_lock);
 
@@ -282,6 +291,7 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 		else
 			need_reschedule = true;
 	}
+	current_disp = tb_data->cur_tb_disp;
 
 	/* calculate time left to next timeout */
 	next_timeout = (tb_data->dim_timeout > 0) ? tb_data->dim_timeout :
@@ -330,7 +340,8 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 		/* dim or idle timeout reached */
 		int next_disp = (time_left < 0) ? APPLETB_CMD_DISP_DIM :
 						  APPLETB_CMD_DISP_OFF;
-		if (appletb_set_tb_disp(tb_data, next_disp) == 0) {
+		if (next_disp != current_disp &&
+		    appletb_set_tb_disp(tb_data, next_disp) == 0) {
 			spin_lock(&tb_data->tb_mode_lock);
 			tb_data->cur_tb_disp = next_disp;
 			spin_unlock(&tb_data->tb_mode_lock);
@@ -410,19 +421,22 @@ static void appletb_update_touchbar_no_lock(struct appletb_data *tb_data,
 	/* see if we need to update the touchbar, taking into account that we
 	 * generally don't want to switch modes while a touchbar key is pressed.
 	 */
-	if ((appletb_get_cur_tb_mode(tb_data) != want_mode ||
-	     appletb_get_cur_tb_disp(tb_data) != want_disp ||
-	     force) &&
+	if (appletb_get_cur_tb_mode(tb_data) != want_mode &&
 	    !appletb_any_tb_key_pressed(tb_data)) {
 		tb_data->pnd_tb_mode = want_mode;
-		tb_data->pnd_tb_disp = want_disp;
 		need_update = true;
-	} else if (want_disp != APPLETB_CMD_DISP_OFF &&
-		   appletb_get_cur_tb_disp(tb_data) != want_disp &&
-		   appletb_any_tb_key_pressed(tb_data)) {
+	}
+
+	if (appletb_get_cur_tb_disp(tb_data) != want_disp &&
+	    (!appletb_any_tb_key_pressed(tb_data) ||
+	     (appletb_any_tb_key_pressed(tb_data) &&
+	      want_disp != APPLETB_CMD_DISP_OFF))) {
 		tb_data->pnd_tb_disp = want_disp;
 		need_update = true;
 	}
+
+	if (force)
+		need_update = true;
 
 	/* schedule the update if desired */
 	//pr_info_ratelimited("update: need_update=%d, want_mode=%d, cur-mode=%d, want_disp=%d, cur-disp=%d\n", need_update, want_mode, tb_data->cur_tb_mode, want_disp, tb_data->cur_tb_disp);
@@ -815,8 +829,8 @@ static void appletb_remove(struct hid_device *hdev)
 	hid_hw_stop(hdev);
 
 	cancel_delayed_work_sync(&tb_data->tb_mode_work);
-	appletb_set_tb_disp(tb_data, APPLETB_CMD_DISP_OFF);
 	appletb_set_tb_mode(tb_data, APPLETB_CMD_MODE_OFF);
+	appletb_set_tb_disp(tb_data, APPLETB_CMD_DISP_ON);
 
 	kfree(tb_data);
 
