@@ -269,7 +269,7 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	unsigned char pending_disp;
 	unsigned char current_disp;
 	bool any_tb_key_pressed, need_reschedule;
-	int rc1 = 0, rc2 = 0;
+	int rc1 = 1, rc2 = 1;
 
 	spin_lock(&tb_data->tb_mode_lock);
 
