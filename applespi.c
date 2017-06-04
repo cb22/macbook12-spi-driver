@@ -1029,7 +1029,17 @@ static int applespi_remove(struct spi_device *spi)
 #ifdef CONFIG_PM
 static int applespi_suspend(struct device *dev)
 {
-	pr_info("device suspend done.\n");
+	struct spi_device *spi = to_spi_device(dev);
+	struct applespi_data *applespi = spi_get_drvdata(spi);
+	acpi_status status;
+
+	status = acpi_disable_gpe(NULL, applespi->gpe);
+	if (ACPI_FAILURE(status)) {
+		pr_err("Failed to disable GPE handler for GPE %d: %s\n",
+		       applespi->gpe, acpi_format_exception(status));
+	}
+
+	pr_info("spi-device suspend done.\n");
 	return 0;
 }
 
@@ -1037,6 +1047,13 @@ static int applespi_resume(struct device *dev)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct applespi_data *applespi = spi_get_drvdata(spi);
+	acpi_status status;
+
+	status = acpi_enable_gpe(NULL, applespi->gpe);
+	if (ACPI_FAILURE(status)) {
+		pr_err("Failed to re-enable GPE handler for GPE %d: %s\n",
+		       applespi->gpe, acpi_format_exception(status));
+	}
 
 	/* Switch on the SPI interface */
 	applespi_enable_spi(applespi);
