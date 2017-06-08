@@ -28,6 +28,9 @@
 #include <linux/dmi.h>
 #include <linux/spinlock.h>
 #include <linux/crc16.h>
+#include <linux/version.h>
+#include <linux/workqueue.h>
+#include <linux/notifier.h>
 
 #include <linux/input.h>
 #include <linux/input/mt.h>
@@ -47,6 +50,8 @@
 
 #define APPLE_FLAG_FKEY		0x01
 
+#define SPI_DEV_CHIP_SEL	0	// from DSDT UBUF
+
 static unsigned int fnmode = 1;
 module_param(fnmode, uint, 0644);
 MODULE_PARM_DESC(fnmode, "Mode of fn key on Apple keyboards (0 = disabled, "
@@ -56,6 +61,7 @@ static unsigned int iso_layout = 0;
 module_param(iso_layout, uint, 0644);
 MODULE_PARM_DESC(iso_layout, "Enable/Disable hardcoded ISO-layout of the keyboard. "
 		"(0 = disabled, [1] = enabled)");
+
 
 struct keyboard_protocol {
 	u16		packet_type;
@@ -103,6 +109,16 @@ struct touchpad_protocol {
 	u8			unknown4[44];
 	struct tp_finger	fingers[MAX_FINGERS];
 	u8			unknown5[208];
+};
+
+struct appleacpi_spi_registration_info {
+	struct class_interface	cif;
+	struct acpi_device 	*adev;
+	struct spi_device 	*spi;
+	int			bus_num;
+	struct spi_master	*spi_master;
+	struct work_struct	work;
+	struct notifier_block	slave_notifier;
 };
 
 struct spi_settings {
@@ -436,7 +452,8 @@ static int applespi_find_settings_field(const char *name)
 	return -1;
 }
 
-static int applespi_get_spi_settings(struct applespi_data *applespi)
+static int applespi_get_spi_settings(acpi_handle handle,
+				     struct spi_settings *settings)
 {
 	u8 uuid[16];
 	union acpi_object *spi_info;
@@ -448,7 +465,7 @@ static int applespi_get_spi_settings(struct applespi_data *applespi)
 
 	acpi_str_to_uuid(acpi_dsm_uuid, uuid);
 
-	spi_info = acpi_evaluate_dsm(applespi->handle, uuid, 1, 1, NULL);
+	spi_info = acpi_evaluate_dsm(handle, uuid, 1, 1, NULL);
 	if (!spi_info) {
 		pr_err("Failed to get SPI info from _DSM method\n");
 		return -ENODEV;
@@ -484,13 +501,13 @@ static int applespi_get_spi_settings(struct applespi_data *applespi)
 			continue;
 		}
 
-		field = (u64 *) ((char *) &applespi->spi_settings + field_off);
+		field = (u64 *) ((char *) settings + field_off);
 		*field = le64_to_cpu(*((__le64 *) value.buffer.pointer));
 	}
 	ACPI_FREE(spi_info);
 
 	/* acpi provided value is in 10us units */
-	applespi->spi_settings.spi_cs_delay *= 10;
+	settings->spi_cs_delay *= 10;
 
 	return 0;
 }
@@ -499,7 +516,8 @@ static int applespi_setup_spi(struct applespi_data *applespi)
 {
 	int sts;
 
-	sts = applespi_get_spi_settings(applespi);
+	sts = applespi_get_spi_settings(applespi->handle,
+					&applespi->spi_settings);
 	if (sts)
 		return sts;
 
@@ -1010,7 +1028,7 @@ static int applespi_probe(struct spi_device *spi)
 		return -ENODEV;
 	}
 
-	pr_info("module probe done.\n");
+	pr_info("spi-device probe done: %s\n", dev_name(&spi->dev));
 
 	return 0;
 }
@@ -1022,7 +1040,7 @@ static int applespi_remove(struct spi_device *spi)
 	acpi_disable_gpe(NULL, applespi->gpe);
 	acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
 
-	pr_info("module remove done.\n");
+	pr_info("spi-device remove done: %s\n", dev_name(&spi->dev));
 	return 0;
 }
 
@@ -1061,7 +1079,7 @@ static int applespi_resume(struct device *dev)
 	/* Switch the touchpad into multitouch mode */
 	applespi_init(applespi);
 
-	pr_info("device resume done.\n");
+	pr_info("spi-device resume done.\n");
 
 	return 0;
 }
@@ -1087,6 +1105,395 @@ static struct spi_driver applespi_driver = {
 	.probe		= applespi_probe,
 	.remove		= applespi_remove,
 };
-module_spi_driver(applespi_driver)
+
+/*
+ * All the following code is to deal with the fact that the _CRS method for
+ * the SPI device in the DSDT returns an empty resource, and the real info is
+ * available from the _DSM method. So we need to hook into the ACPI device
+ * registration and create and register the SPI device ourselves.
+ *
+ * All of this can be removed and replaced with
+ * module_spi_driver(applespi_driver)
+ * when the core adds support for this sort of setup.
+ */
+
+/*
+ * Configure the spi device with the info from the _DSM method.
+ */
+static int appleacpi_config_spi_dev(struct spi_device *spi,
+				    struct acpi_device *adev)
+{
+	struct spi_settings settings;
+	int ret;
+
+	ret = applespi_get_spi_settings(acpi_device_handle(adev), &settings);
+	if (ret)
+		return ret;
+
+	spi->max_speed_hz = 1000000000 / settings.spi_sclk_period;
+	spi->chip_select = SPI_DEV_CHIP_SEL;
+	spi->bits_per_word = settings.spi_word_size;
+
+	spi->mode =
+		(settings.spi_spo * SPI_CPOL) |
+		(settings.spi_sph * SPI_CPHA) |
+		(settings.spi_bit_order == 0 ? SPI_LSB_FIRST : 0);
+
+	spi->irq = -1;		// uses GPE
+
+	spi->dev.platform_data = NULL;
+	spi->controller_data = NULL;
+	spi->controller_state = NULL;
+
+	pr_debug("spi-config: max_speed_hz=%d, chip_select=%d, bits_per_word=%d,"
+		 " mode=%x, irq=%d\n", spi->max_speed_hz, spi->chip_select,
+		 spi->bits_per_word, spi->mode, spi->irq);
+
+	return 0;
+}
+
+static int appleacpi_is_device_registered(struct device *dev, void *data)
+{
+	struct spi_device *spi = to_spi_device(dev);
+	struct spi_master *spi_master = data;
+
+	if (spi->master == spi_master && spi->chip_select == SPI_DEV_CHIP_SEL)
+		return -EBUSY;
+	return 0;
+}
+
+/*
+ * Unregister all physical devices devices associated with the acpi device,
+ * so that the new SPI device becomes the first physical device for it.
+ * Otherwise we don't get properly registered as the driver for the spi
+ * device.
+ */
+static void appleacpi_unregister_phys_devs(struct acpi_device *adev)
+{
+	struct acpi_device_physical_node *entry;
+	struct device *dev;
+
+	while (true) {
+		mutex_lock(&adev->physical_node_lock);
+
+		if (list_empty(&adev->physical_node_list)) {
+			mutex_unlock(&adev->physical_node_lock);
+			break;
+		}
+
+		entry = list_first_entry(&adev->physical_node_list,
+					 struct acpi_device_physical_node,
+					 node);
+		dev = get_device(entry->dev);
+
+		mutex_unlock(&adev->physical_node_lock);
+
+		platform_device_unregister(to_platform_device(dev));
+		put_device(dev);
+	}
+}
+
+/*
+ * Create the spi device for the keyboard and touchpad and register it with
+ * the master spi device.
+ */
+static int appleacpi_register_spi_device(struct spi_master *spi_master,
+					 struct acpi_device *adev)
+{
+	struct appleacpi_spi_registration_info *reg_info;
+	struct spi_device *spi;
+	int ret;
+
+	reg_info = acpi_driver_data(adev);
+
+	/* check if an spi device is already registered */
+	ret = bus_for_each_dev(&spi_bus_type, NULL, spi_master,
+			       appleacpi_is_device_registered);
+	if (ret == -EBUSY) {
+		pr_info("Spi Device already registered - patched DSDT?\n");
+		ret = 0;
+		goto release_master;
+	} else if (ret) {
+		pr_err("Error checking for spi device registered: %d\n", ret);
+		goto release_master;
+	}
+
+	/* none is; check if acpi device is there */
+	if (acpi_bus_get_status(adev) || !adev->status.present) {
+		pr_info("ACPI device is not present\n");
+		ret = 0;
+		goto release_master;
+	}
+
+	/*
+	 * acpi device is there.
+	 *
+	 * First unregister any physical devices already associated with this
+	 * acpi device (done by acpi_generic_device_attach).
+	 * */
+	appleacpi_unregister_phys_devs(adev);
+
+	/* create spi device */
+	spi = spi_alloc_device(spi_master);
+	if (!spi) {
+		pr_err("Failed to allocate spi device\n");
+		ret = -ENOMEM;
+		goto release_master;
+	}
+
+	ret = appleacpi_config_spi_dev(spi, adev);
+	if (ret)
+		goto free_spi;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
+	acpi_set_modalias(adev, acpi_device_hid(adev), spi->modalias,
+			  sizeof(spi->modalias));
+#else
+	strlcpy(spi->modalias, acpi_device_hid(adev), sizeof(spi->modalias));
+#endif
+
+	adev->power.flags.ignore_parent = true;
+
+	ACPI_COMPANION_SET(&spi->dev, adev);
+	acpi_device_set_enumerated(adev);
+
+	/* add spi device */
+	ret = spi_add_device(spi);
+	if (ret) {
+		adev->power.flags.ignore_parent = false;
+		pr_err("Failed to add spi device: %d\n", ret);
+		goto free_spi;
+	}
+
+	reg_info->spi = spi;
+
+	pr_info("Added spi device %s\n", dev_name(&spi->dev));
+
+	goto release_master;
+
+free_spi:
+	spi_dev_put(spi);
+release_master:
+	spi_master_put(spi_master);
+	reg_info->spi_master = NULL;
+
+	return ret;
+}
+
+static void appleacpi_dev_registration_worker(struct work_struct *work)
+{
+	struct appleacpi_spi_registration_info *info =
+		container_of(work, struct appleacpi_spi_registration_info, work);
+
+	appleacpi_register_spi_device(info->spi_master, info->adev);
+}
+
+/*
+ * Callback for whenever a new master spi device is added.
+ */
+static int appleacpi_spi_master_added(struct device *dev,
+				      struct class_interface *cif)
+{
+	struct spi_master *spi_master =
+		container_of(dev, struct spi_master, dev);
+	struct appleacpi_spi_registration_info *info =
+		container_of(cif, struct appleacpi_spi_registration_info, cif);
+
+	pr_debug("New spi-master device with bus-number %d was added\n",
+		 spi_master->bus_num);
+
+	if (spi_master->bus_num != info->bus_num)
+		return 0;
+
+	pr_info("Got spi-master device for bus-number %d\n", info->bus_num);
+
+	/*
+	 * mutexes are held here, preventing unregistering of physical devices,
+	 * so need to do the actual registration in a worker.
+	 */
+	info->spi_master = spi_master_get(spi_master);
+	schedule_work(&info->work);
+
+	return 0;
+}
+
+/*
+ * Callback for whenever a slave spi device is added or removed.
+ */
+static int appleacpi_spi_slave_changed(struct notifier_block *nb,
+                                       unsigned long action, void *data)
+{
+	struct appleacpi_spi_registration_info *info =
+		container_of(nb, struct appleacpi_spi_registration_info,
+			     slave_notifier);
+	struct spi_device *spi = data;
+
+	pr_debug("SPI slave device changed: action=%lu, dev=%s\n",
+		 action, dev_name(&spi->dev));
+
+	switch (action) {
+	case BUS_NOTIFY_DEL_DEVICE:
+		if (spi == info->spi) {
+			info->spi = NULL;
+			return NOTIFY_OK;
+		}
+		break;
+
+	default:
+		break;
+	}
+
+	return NOTIFY_DONE;
+}
+
+/*
+ * spi_master_class is not exported, so this is an ugly hack to get it anyway.
+ */
+static struct class *appleacpi_get_spi_master_class(void)
+{
+	struct spi_master *spi_master;
+	struct device dummy;
+	struct class *cls = NULL;
+
+	memset(&dummy, 0, sizeof(dummy));
+
+	spi_master = spi_alloc_master(&dummy, 0);
+	if (spi_master) {
+		cls = spi_master->dev.class;
+		spi_master_put(spi_master);
+	}
+
+	return cls;
+}
+
+static int appleacpi_probe(struct acpi_device *adev)
+{
+	struct appleacpi_spi_registration_info *reg_info;
+	int bus_num;
+	int ret;
+
+	pr_debug("Probing acpi-device %s: bus-id='%s', adr=%lu, uid='%s'\n",
+		 acpi_device_hid(adev), acpi_device_bid(adev),
+		 acpi_device_adr(adev), acpi_device_uid(adev));
+
+	ret = spi_register_driver(&applespi_driver);
+	if (ret) {
+		pr_err("Failed to register spi-driver: %d\n", ret);
+		return ret;
+	}
+
+	if (acpi_device_uid(adev) &&
+	    !kstrtouint(acpi_device_uid(adev), 0, &bus_num)) {
+		/*
+		 * Ideally we would just call spi_register_board_info() here,
+		 * but that function is not exported. Additionally, we need to
+		 * perform some extra work during device creation, such as
+		 * unregistering physical devices. So instead we have do the
+		 * registration ourselves. For that we see if our spi-master
+		 * has been registered already, and if not jump through some
+		 * hoops to make sure we are notified when it does.
+		 */
+
+		reg_info = kzalloc(sizeof(*reg_info), GFP_KERNEL);
+		if (!reg_info) {
+			pr_err("Failed to allocate registration-info\n");
+			ret = -ENOMEM;
+			goto unregister_driver;
+		}
+
+		reg_info->bus_num = bus_num;
+		reg_info->adev = adev;
+		INIT_WORK(&reg_info->work, appleacpi_dev_registration_worker);
+
+		adev->driver_data = reg_info;
+
+		/*
+		 * Set up listening for spi slave removals so we can properly
+		 * handle them.
+		 */
+		reg_info->slave_notifier.notifier_call =
+			appleacpi_spi_slave_changed;
+		ret = bus_register_notifier(&spi_bus_type,
+					    &reg_info->slave_notifier);
+		if (ret) {
+			pr_err("Failed to register notifier for spi slaves: "
+			       "%d\n", ret);
+			goto free_reg_info;
+		}
+
+		/*
+		 * Listen for additions of spi-master devices so we can
+		 * register our spi device when the relevant master is added.
+		 * Note that our callback gets called immediately for all
+		 * existing master devices, so this takes care of registration
+		 * when the master already exists too.
+		 */
+		reg_info->cif.class = appleacpi_get_spi_master_class();
+		reg_info->cif.add_dev = appleacpi_spi_master_added;
+
+		ret = class_interface_register(&reg_info->cif);
+		if (ret) {
+			pr_err("Failed to register watcher for "
+			       "spi-master: %d\n", ret);
+			goto unregister_notifier;
+		}
+
+		if (!spi_busnum_to_master(bus_num)) {
+			pr_info("No spi-master device found for bus-number %d "
+				"- waiting for it to be registered\n", bus_num);
+		}
+	} else {
+		pr_warn("Non-numeric unique-id '%s' found on acpi-device %s",
+			acpi_device_uid(adev), acpi_device_hid(adev));
+	}
+
+	pr_info("acpi-device probe done: %s\n", acpi_device_hid(adev));
+
+	return 0;
+
+unregister_notifier:
+	bus_unregister_notifier(&spi_bus_type, &reg_info->slave_notifier);
+free_reg_info:
+	adev->driver_data = NULL;
+	kfree(reg_info);
+unregister_driver:
+	spi_unregister_driver(&applespi_driver);
+	return ret;
+}
+
+static int appleacpi_remove(struct acpi_device *adev)
+{
+	struct appleacpi_spi_registration_info *reg_info;
+
+	reg_info = acpi_driver_data(adev);
+	if (reg_info) {
+		class_interface_unregister(&reg_info->cif);
+		bus_unregister_notifier(&spi_bus_type,
+					&reg_info->slave_notifier);
+		cancel_work_sync(&reg_info->work);
+		if (reg_info->spi)
+			spi_unregister_device(reg_info->spi);
+		kfree(reg_info);
+	}
+
+	spi_unregister_driver(&applespi_driver);
+
+	pr_info("acpi-device remove done: %s\n", acpi_device_hid(adev));
+
+	return 0;
+}
+
+static struct acpi_driver appleacpi_driver = {
+	.name		= "appleacpi",
+	.class		= "topcase", /* ? */
+	.owner		= THIS_MODULE,
+	.ids		= ACPI_PTR(applespi_acpi_match),
+	.ops		= {
+		.add		= appleacpi_probe,
+		.remove		= appleacpi_remove,
+	},
+};
+
+module_acpi_driver(appleacpi_driver)
 
 MODULE_LICENSE("GPL");

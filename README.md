@@ -2,9 +2,7 @@ Very simple, work in progress input driver for the SPI keyboard / trackpad found
 
 Using it:
 ---------
-To get this driver to work on a 2016 12" MacBook, you'll need to boot the kernel with `intremap=nosid`. Also, you'll need to modify your DSDT as described by Leif Liddy at https://bugzilla.kernel.org/attachment.cgi?id=206671. (but don't worry about applying patches. Also see https://wiki.archlinux.org/index.php/DSDT for a quicker way to load custom DSDTs without recompiling)
-
-This should result in the intel-lpss driver attaching itself to the SPI controller, and exposing the `APP000D` device.
+To get this driver to work on a 2016 12" MacBook or a 2016 MacBook Pro, you'll need to boot the kernel with `intremap=nosid`. Additionally, you need to make sure the `spi_pxa2xx_platform` and `intel_lpss_pci` modules are loaded. This should result in the intel-lpss driver attaching itself to the SPI controller.
 
 The 2015 MacBook seems much more complicated, as the DMA controller isn't built in to the SPI controller. Unfortunately, I don't have a 2015 model to test.
 
@@ -26,7 +24,6 @@ What doesn't work:
 Known bugs:
 -----------
 * Occasionally, the SPI device can get itself into a state where it causes an interrupt storm. There should be a way of resetting it, or better yet avoiding this state altogether.
-* You shouldn't have to modify your DSDT to get it running.
 
 Interrupts:
 -----------
