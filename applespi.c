@@ -303,6 +303,30 @@ static const struct dmi_system_id applespi_touchpad_infos[] = {
 		.driver_data = &applespi_macbookpro133_info,
 	},
 	{
+		.ident = "Apple MacBookPro14,1",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro14,1")
+		},
+		.driver_data = &applespi_macbookpro131_info,
+	},
+	{
+		.ident = "Apple MacBookPro14,2",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro14,2")
+		},
+		.driver_data = &applespi_macbookpro131_info,	// same touchpad
+	},
+	{
+		.ident = "Apple MacBookPro14,3",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro14,3")
+		},
+		.driver_data = &applespi_macbookpro133_info,
+	},
+	{
 		.ident = "Apple Generic MacBook(Pro)",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
