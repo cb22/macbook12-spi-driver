@@ -18,6 +18,7 @@
 #include <linux/usb.h>
 #include <linux/usb/ch9.h>
 #include <linux/workqueue.h>
+#include <linux/notifier.h>
 #include <linux/jiffies.h>
 #include <linux/spinlock.h>
 #include <linux/sysfs.h>
@@ -945,19 +946,19 @@ module_hid_driver(appletb_driver);
 
 #else /* WE_ARE_IN_HID_IGNORE_LIST */
 /*
- * Horrible hack to work around the fact that it's not possible to dynamically
- * be added to hid-core's hid_ignore_list. This means the hid-generic will hid
- * driver always get attached to the touchbar device. This workaround attempts
- * to detect that, release the driver, and trigger our driver instead.
+ * Hack to work around the fact that it's not possible to dynamically be added
+ * to hid-core's hid_ignore_list. This means the hid-generic hid driver will
+ * always get attached to the touchbar device. So we listen on the usb bus for
+ * the device to appear, release the hid-generic driver (if attached), and
+ * trigger our driver instead.
  */
 
 #define APPLETB_TB_SIMPLE_IFNUM 2
 
 static struct {
-	struct delayed_work  work;
-	struct usb_interface *intf;
-	ktime_t start;
-} appletb_usb_hack_check_data;
+	struct work_struct work;
+	struct hid_device  *hdev;
+} appletb_usb_hack_reg_data;
 
 static void appletb_usb_hack_release_hid_dev(struct hid_device *hdev)
 {
@@ -972,121 +973,175 @@ static void appletb_usb_hack_release_hid_dev(struct hid_device *hdev)
 	put_device(dev);
 }
 
-static void appletb_usb_hack_check_hid_driver(struct work_struct *work)
+static void appletb_usb_hack_reg_hid_driver(struct work_struct *work)
 {
-	struct usb_interface *intf;
 	struct hid_device *hid;
-	s64 wait_time;
 	int rc;
 
-	/* check if we're still active */
-	intf = usb_get_intf(appletb_usb_hack_check_data.intf);
-	if (!intf)
-		return;
-
-	wait_time = ktime_ms_delta(ktime_get(), appletb_usb_hack_check_data.start);
-
-	/* get associated hid device */
-	hid = usb_get_intfdata(intf);
-
-	/* wait up to 3s for hid dev and driver to get attached */
-	if ((!hid || !hid->driver) && wait_time < 3000) {
-		/* try again */
-		schedule_delayed_work(&appletb_usb_hack_check_data.work,
-				      msecs_to_jiffies(50));
-		goto done;
-	}
+	/* check if a hid driver is attached */
+	hid = appletb_usb_hack_reg_data.hdev;
 
 	if (!hid || !hid->driver) {
-		pr_warn("No hid driver attached to touchbar in 3s - giving up");
-		goto all_done;
-	}
+		pr_debug("No hid driver attached to touchbar");
 
 	/* check if we got attached */
-	if (strcmp(hid->driver->name, appletb_driver.name) == 0)
-		goto all_done;
+	} else if (strcmp(hid->driver->name, appletb_driver.name) == 0) {
+		pr_debug("Already attached");
 
 	/* else normally expect hid-generic to be the one attached */
-	if (strcmp(hid->driver->name, "hid-generic") != 0) {
+	} else if (strcmp(hid->driver->name, "hid-generic") != 0) {
 		pr_warn("Unexpected hid driver '%s' attached to touchbar",
 			hid->driver->name);
+
+	} else {
+		/* detach current driver, and re-register ourselves in order to
+		 * trigger attachment. */
+		pr_info("releasing current hid driver '%s'\n", hid->driver->name);
+		appletb_usb_hack_release_hid_dev(hid);
+
+		hid_unregister_driver(&appletb_driver);
+		rc = hid_register_driver(&appletb_driver);
+		if (rc)
+			pr_err("Error (re)registering touchbar hid driver (%d)",
+			       rc);
 	}
 
-	/* detach current driver, and re-register ourselves in order to
-	 * trigger attachment. */
-	pr_info("releasing current hid driver '%s'\n", hid->driver->name);
-	appletb_usb_hack_release_hid_dev(hid);
-
-	hid_unregister_driver(&appletb_driver);
-	rc = hid_register_driver(&appletb_driver);
-	if (rc)
-		pr_err("Error (re)registering touchbar hid driver (%d)", rc);
-
- all_done:
-	appletb_usb_hack_check_data.intf = NULL;
- done:
-	usb_put_intf(intf);
+	put_device(&hid->dev);
 }
 
-static int appletb_usb_hack_probe(struct usb_interface *intf,
-				  const struct usb_device_id *id)
+/*
+ * hid_bus_type is not exported, so this is an ugly hack to get it anyway.
+ */
+static struct bus_type *appletb_usb_hack_get_usb_bus(void)
 {
-	struct usb_device *udev;
+	struct hid_device *hid;
+	struct bus_type *bus = NULL;
 
-	udev = interface_to_usbdev(intf);
-	intf = usb_ifnum_to_if(udev, APPLETB_TB_SIMPLE_IFNUM);
-
-	if (intf && intf != appletb_usb_hack_check_data.intf) {
-		appletb_usb_hack_check_data.intf = intf;
-		appletb_usb_hack_check_data.start = ktime_get();
-		schedule_delayed_work(&appletb_usb_hack_check_data.work,
-				      msecs_to_jiffies(50));
+	hid = hid_allocate_device();
+	if (!IS_ERR_OR_NULL(hid)) {
+		bus = hid->dev.bus;
+		hid_destroy_device(hid);
+	} else {
+		bus = ERR_PTR(PTR_ERR(hid));
 	}
 
-	return -ENODEV;
+	return bus;
 }
 
-static void appletb_usb_hack_disconnect(struct usb_interface *intf)
+/* hid_match_id() is not exported */
+static bool appletb_usb_hack_hid_match_id(struct hid_device *hdev,
+					  const struct hid_device_id *id)
 {
-	cancel_delayed_work_sync(&appletb_usb_hack_check_data.work);
-	appletb_usb_hack_check_data.intf = NULL;
+	for (; id->bus; id++) {
+		if (id->bus == hdev->bus &&
+		    id->vendor == hdev->vendor &&
+		    id->product == hdev->product)
+			return true;
+	}
+
+	return false;
 }
 
-static int appletb_usb_hack_register(struct usb_driver *drv)
+static int appletb_hid_bus_changed(struct notifier_block *nb,
+                                   unsigned long action, void *data)
 {
-	int rc;
+	struct device *dev = data;
+	struct hid_device *hdev;
+	struct usb_interface *intf;
 
-	INIT_DELAYED_WORK(&appletb_usb_hack_check_data.work,
-			  appletb_usb_hack_check_hid_driver);
+	pr_debug("HID device changed: action=%lu, dev=%s\n", action,
+		 dev_name(dev));
 
-	rc = hid_register_driver(&appletb_driver);
-	if (rc)
-		return rc;
+	hdev = to_hid_device(dev);
+	if (!appletb_usb_hack_hid_match_id(hdev, appletb_touchbar_devices))
+		return NOTIFY_DONE;
 
-	return usb_register(drv);
+	intf = to_usb_interface(hdev->dev.parent);
+	if (intf->cur_altsetting->desc.bInterfaceNumber !=
+	    APPLETB_TB_SIMPLE_IFNUM)
+		return NOTIFY_DONE;
+
+	switch (action) {
+	case BUS_NOTIFY_ADD_DEVICE:
+		pr_info("Touchbar usb device added; dev=%s\n", dev_name(dev));
+
+		get_device(&hdev->dev);
+		appletb_usb_hack_reg_data.hdev = hdev;
+		schedule_work(&appletb_usb_hack_reg_data.work);
+
+		return NOTIFY_OK;
+
+	default:
+		break;
+	}
+
+	return NOTIFY_DONE;
 }
 
-static void appletb_usb_hack_unregister(struct usb_driver *drv)
+static int appletb_hid_bus_dev_iter(struct device *dev, void *data)
 {
-	usb_deregister(drv);
+	appletb_hid_bus_changed(NULL, BUS_NOTIFY_ADD_DEVICE, dev);
+	return 0;
+}
+
+static struct notifier_block appletb_hid_bus_notifier = {
+	.notifier_call = appletb_hid_bus_changed,
+};
+
+static int __init appletb_init(void)
+{
+	int ret;
+	struct bus_type *hid_bus;
+
+	INIT_WORK(&appletb_usb_hack_reg_data.work,
+		  appletb_usb_hack_reg_hid_driver);
+
+	ret = hid_register_driver(&appletb_driver);
+	if (ret) {
+		pr_err("Error registering hid driver: %d\n", ret);
+		return ret;
+	}
+
+	hid_bus = appletb_usb_hack_get_usb_bus();
+	if (IS_ERR_OR_NULL(hid_bus)) {
+		ret = PTR_ERR(hid_bus);
+		pr_err("Error getting hid bus: %d\n", ret);
+		goto unregister_hid_driver;
+	}
+
+	ret = bus_register_notifier(hid_bus, &appletb_hid_bus_notifier);
+	if (ret) {
+		pr_err("Error registering hid bus notifier: %d\n", ret);
+		goto unregister_hid_driver;
+	}
+
+	bus_for_each_dev(hid_bus, NULL, NULL, appletb_hid_bus_dev_iter);
+
+	return 0;
+
+unregister_hid_driver:
+	hid_unregister_driver(&appletb_driver);
+
+	return ret;
+}
+
+static void __exit appletb_exit(void)
+{
+	struct bus_type *hid_bus;
+
+	hid_bus = appletb_usb_hack_get_usb_bus();
+	if (!IS_ERR_OR_NULL(hid_bus)) {
+		bus_unregister_notifier(hid_bus, &appletb_hid_bus_notifier);
+	} else {
+		pr_err("Error getting hid bus: %ld\n", PTR_ERR(hid_bus));
+	}
+
 	hid_unregister_driver(&appletb_driver);
 }
 
-static const struct usb_device_id appletb_usb_hack_devices[] = {
-	{ USB_DEVICE(USB_ID_VENDOR_APPLE, USB_ID_PRODUCT_IBRIDGE) },
-	{ },
-};
-MODULE_DEVICE_TABLE(usb, appletb_usb_hack_devices);
+module_init(appletb_init);
+module_exit(appletb_exit);
 
-static struct usb_driver appletb_usb_hack_driver = {
-	.name = "apple-touchbar-usb-hack",
-	.probe = appletb_usb_hack_probe,
-	.disconnect = appletb_usb_hack_disconnect,
-	.id_table = appletb_usb_hack_devices,
-};
-
-module_driver(appletb_usb_hack_driver, appletb_usb_hack_register,
-	      appletb_usb_hack_unregister);
 #endif /* WE_ARE_IN_HID_IGNORE_LIST */
 
 MODULE_AUTHOR("Ronald Tschalär");
