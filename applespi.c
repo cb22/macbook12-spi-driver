@@ -31,6 +31,7 @@
 #include <linux/version.h>
 #include <linux/workqueue.h>
 #include <linux/notifier.h>
+#include <linux/leds.h>
 
 #include <linux/input.h>
 #include <linux/input/mt.h>
@@ -47,6 +48,12 @@
 
 #define MAX_FINGERS		6
 #define MAX_FINGER_ORIENTATION	16384
+
+#define MIN_KBD_BL_LEVEL	32
+#define MAX_KBD_BL_LEVEL	255
+#define KBD_BL_LEVEL_SCALE	1000000
+#define KBD_BL_LEVEL_ADJ	\
+	((MAX_KBD_BL_LEVEL - MIN_KBD_BL_LEVEL) * KBD_BL_LEVEL_SCALE / 255)
 
 #define APPLE_FLAG_FKEY		0x01
 
@@ -187,9 +194,13 @@ struct applespi_data {
 
 	bool				want_cl_led_on;
 	bool				have_cl_led_on;
-	unsigned			led_msg_cntr;
-	spinlock_t			led_msg_lock;
-	bool				led_msg_queued;
+	unsigned			want_bl_level;
+	unsigned			have_bl_level;
+	unsigned			cmd_msg_cntr;
+	spinlock_t			cmd_msg_lock;
+	bool				cmd_msg_queued;
+
+	struct led_classdev		backlight_info;
 };
 
 static const unsigned char applespi_scancodes[] = {
@@ -299,6 +310,8 @@ u8 *applespi_init_commands[] = {
 };
 
 u8 *applespi_caps_lock_led_cmd = "\x40\x01\x00\x00\x00\x00\x0C\x00\x51\x01\x00\x00\x02\x00\x02\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x66\x6a";
+
+u8 *applespi_kbd_led_cmd = "\x40\x01\x00\x00\x00\x00\x10\x00\x51\xB0\x00\x00\x06\x00\x06\x00\xB0\x01\x3E\x00\xF4\x01\x96\xC5\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x3E\x59";
 
 static void
 applespi_setup_read_txfr(struct applespi_data *applespi,
@@ -521,7 +534,7 @@ static int applespi_setup_spi(struct applespi_data *applespi)
 	if (sts)
 		return sts;
 
-	spin_lock_init(&applespi->led_msg_lock);
+	spin_lock_init(&applespi->cmd_msg_lock);
 
 	return 0;
 }
@@ -570,7 +583,7 @@ static void applespi_init(struct applespi_data *applespi)
 	pr_info("modeswitch done.\n");
 }
 
-static int applespi_send_leds_cmd(struct applespi_data *applespi);
+static int applespi_send_cmd_msg(struct applespi_data *applespi);
 
 static void applespi_async_write_complete(void *context)
 {
@@ -579,38 +592,68 @@ static void applespi_async_write_complete(void *context)
 
 	applespi_check_write_status(applespi, applespi->wr_m.status);
 
-	spin_lock_irqsave(&applespi->led_msg_lock, flags);
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
-	applespi->led_msg_queued = false;
-	applespi_send_leds_cmd(applespi);
+	applespi->cmd_msg_queued = false;
+	applespi_send_cmd_msg(applespi);
 
-	spin_unlock_irqrestore(&applespi->led_msg_lock, flags);
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 }
 
 static int
-applespi_send_leds_cmd(struct applespi_data *applespi)
+applespi_send_cmd_msg(struct applespi_data *applespi)
 {
 	u16 crc;
 	int sts;
 
-	/* check whether send is needed and whether one is in progress */
-	if (applespi->want_cl_led_on == applespi->have_cl_led_on ||
-	    applespi->led_msg_queued) {
+	/* check whether send is in progress */
+	if (applespi->cmd_msg_queued)
+		return 0;
+
+	/* do we need caps-lock command? */
+	if (applespi->want_cl_led_on != applespi->have_cl_led_on) {
+		applespi->have_cl_led_on = applespi->want_cl_led_on;
+
+		/* build led command buffer */
+		memcpy(applespi->tx_buffer, applespi_caps_lock_led_cmd,
+		       APPLESPI_PACKET_SIZE);
+
+		applespi->tx_buffer[11] = applespi->cmd_msg_cntr++ & 0xff;
+		applespi->tx_buffer[17] = applespi->have_cl_led_on ? 2 : 0;
+
+		crc = crc16(0, applespi->tx_buffer + 8, 10);
+		applespi->tx_buffer[18] = crc & 0xff;
+		applespi->tx_buffer[19] = crc >> 8;
+
+	/* do we need backlight command? */
+	} else if (applespi->want_bl_level != applespi->have_bl_level) {
+		applespi->have_bl_level = applespi->want_bl_level;
+
+		/* build command buffer */
+		memcpy(applespi->tx_buffer, applespi_kbd_led_cmd,
+		       APPLESPI_PACKET_SIZE);
+
+		applespi->tx_buffer[11] = applespi->cmd_msg_cntr++ & 0xff;
+
+		applespi->tx_buffer[18] = applespi->have_bl_level & 0xff;
+		applespi->tx_buffer[19] = applespi->have_bl_level >> 8;
+
+		if (applespi->have_bl_level > 0) {
+			applespi->tx_buffer[20] = 0xF4;
+			applespi->tx_buffer[21] = 0x01;
+		} else {
+			applespi->tx_buffer[20] = 0x01;
+			applespi->tx_buffer[21] = 0x00;
+		}
+
+		crc = crc16(0, applespi->tx_buffer + 8, 14);
+		applespi->tx_buffer[22] = crc & 0xff;
+		applespi->tx_buffer[23] = crc >> 8;
+
+	/* everything's up-to-date */
+	} else {
 		return 0;
 	}
-
-	applespi->have_cl_led_on = applespi->want_cl_led_on;
-
-	/* build led command buffer */
-	memcpy(applespi->tx_buffer, applespi_caps_lock_led_cmd,
-	       APPLESPI_PACKET_SIZE);
-
-	applespi->tx_buffer[11] = applespi->led_msg_cntr++ & 0xff;
-	applespi->tx_buffer[17] = applespi->have_cl_led_on ? 2 : 0;
-
-	crc = crc16(0, applespi->tx_buffer + 8, 10);
-	applespi->tx_buffer[18] = crc & 0xff;
-	applespi->tx_buffer[19] = crc >> 8;
 
 	/* send command */
 	applespi_setup_write_txfr(applespi, &applespi->wr_t, &applespi->st_t);
@@ -623,25 +666,48 @@ applespi_send_leds_cmd(struct applespi_data *applespi)
 	if (sts != 0)
 		pr_warn("Error queueing async write to device: %d\n", sts);
 	else
-		applespi->led_msg_queued = true;
+		applespi->cmd_msg_queued = true;
 
 	return sts;
 }
 
 static int
-applespi_set_leds(struct applespi_data *applespi, bool capslock_on)
+applespi_set_capsl_led(struct applespi_data *applespi, bool capslock_on)
 {
 	unsigned long flags;
 	int sts;
 
-	spin_lock_irqsave(&applespi->led_msg_lock, flags);
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
 	applespi->want_cl_led_on = capslock_on;
-	sts = applespi_send_leds_cmd(applespi);
+	sts = applespi_send_cmd_msg(applespi);
 
-	spin_unlock_irqrestore(&applespi->led_msg_lock, flags);
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 
 	return sts;
+}
+
+static void
+applespi_set_bl_level(struct led_classdev *led_cdev, enum led_brightness value)
+
+{
+	struct applespi_data *applespi =
+		container_of(led_cdev, struct applespi_data, backlight_info);
+	unsigned long flags;
+	int sts;
+
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	if (value == 0)
+		applespi->want_bl_level = value;
+	else
+		applespi->want_bl_level = (unsigned)
+			((value * KBD_BL_LEVEL_ADJ) / KBD_BL_LEVEL_SCALE +
+			 MIN_KBD_BL_LEVEL);
+
+	sts = applespi_send_cmd_msg(applespi);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 }
 
 static int
@@ -653,7 +719,7 @@ applespi_event(struct input_dev *dev, unsigned int type, unsigned int code,
 	switch (type) {
 
 	case EV_LED:
-		applespi_set_leds(applespi, !!test_bit(LED_CAPSL, dev->led));
+		applespi_set_capsl_led(applespi, !!test_bit(LED_CAPSL, dev->led));
 		return 0;
 	}
 
@@ -1028,6 +1094,20 @@ static int applespi_probe(struct spi_device *spi)
 		return -ENODEV;
 	}
 
+	/* set up keyboard-backlight */
+	applespi->backlight_info.name            = "spi::kbd_backlight";
+	applespi->backlight_info.default_trigger = "kbd-backlight";
+	applespi->backlight_info.brightness_set  = applespi_set_bl_level;
+
+	result = devm_led_classdev_register(&spi->dev,
+					    &applespi->backlight_info);
+	if (result) {
+		pr_err("Unable to register keyboard backlight class dev (%d)\n",
+		       result);
+		/* not fatal */
+	}
+
+	/* done */
 	pr_info("spi-device probe done: %s\n", dev_name(&spi->dev));
 
 	return 0;
