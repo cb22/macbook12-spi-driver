@@ -69,7 +69,9 @@ Some useful values are (since the value is a bitmask, these can be combined):
 
 Touchbar:
 ---------
-The touchbar driver is called `appletb`. It provides basic functionality, enabling the touchbar and switching between modes based on the FN key. Furthermore the touchbar is automatically switched off if no (internal) keyboard, touchpad, or touchbar input is received for 60 seconds; any (internal) keyboard or touchpad input switches it back on.
+The touchbar driver is called `appletb`. It provides basic functionality, enabling the touchbar and switching between modes based on the FN key. Furthermore the touchbar is automatically dimmed and later switched off if no (internal) keyboard, touchpad, or touchbar input is received for a period of time; any (internal) keyboard, touchpad, or touchbar input switches it back on.
+
+The timeouts till the touchbar is dimmed and turned off can be changed via the `idle_timeout` and `dim_timeout` module params or sysfs attributes (`/sys/class/input/input9/device/...`); they default to 3min and 2.5min, respectively. See also `modinfo appletb`.
 
 Some useful threads:
 --------------------
