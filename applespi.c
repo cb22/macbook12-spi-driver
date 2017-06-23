@@ -67,7 +67,7 @@ MODULE_PARM_DESC(fnmode, "Mode of fn key on Apple keyboards (0 = disabled, "
 static unsigned int iso_layout = 0;
 module_param(iso_layout, uint, 0644);
 MODULE_PARM_DESC(iso_layout, "Enable/Disable hardcoded ISO-layout of the keyboard. "
-		"(0 = disabled, [1] = enabled)");
+		"([0] = disabled, 1 = enabled)");
 
 
 struct keyboard_protocol {
