@@ -217,6 +217,9 @@ static const unsigned char applespi_scancodes[] = {
 	KEY_F10, KEY_F11, KEY_F12, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 	KEY_RIGHT, KEY_LEFT, KEY_DOWN, KEY_UP,
 	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, KEY_102ND,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, KEY_RO, 0, KEY_YEN, 0, 0, 0, 0, 0,
+	0, KEY_KATAKANAHIRAGANA, KEY_MUHENKAN
 };
 
 static const unsigned char applespi_controlcodes[] = {
