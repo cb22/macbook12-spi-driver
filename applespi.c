@@ -274,8 +274,8 @@ static u8 *acpi_dsm_uuid = "a0b5b7c6-1318-441c-b0c9-fe695eaf949b";
 
 static struct applespi_tp_info applespi_macbookpro131_info = { -6243, 6749, -170, 7685 };
 static struct applespi_tp_info applespi_macbookpro133_info = { -7456, 7976, -163, 9283 };
-// MacBook11, MacBook12
-static struct applespi_tp_info applespi_default_info = { -4828, 5345, -203, 6803 };
+// MacBook8, MacBook9, MacBook10
+static struct applespi_tp_info applespi_default_info = { -5087, 5579, -182, 6089 };
 
 static const struct dmi_system_id applespi_touchpad_infos[] = {
 	{
