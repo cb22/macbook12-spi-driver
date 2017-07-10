@@ -14,8 +14,6 @@ As root, do the following:
 ```
 apt install dkms
 git clone https://github.com/cb22/macbook12-spi-driver.git /usr/src/applespi-0.1
-dkms add -m applespi -v 0.1
-dkms build -m applespi -v 0.1
 dkms install -m applespi -v 0.1
 
 echo -e "\n# applespi\napplespi\nintel_lpss_pci\nspi_pxa2xx_platform" >> /etc/initramfs-tools/modules
