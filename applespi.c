@@ -471,7 +471,11 @@ static int applespi_find_settings_field(const char *name)
 static int applespi_get_spi_settings(acpi_handle handle,
 				     struct spi_settings *settings)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
+	guid_t guid, *uuid = &guid;
+#else
 	u8 uuid[16];
+#endif
 	union acpi_object *spi_info;
 	union acpi_object name;
 	union acpi_object value;
@@ -479,7 +483,11 @@ static int applespi_get_spi_settings(acpi_handle handle,
 	int field_off;
 	u64 *field;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
+	guid_parse(acpi_dsm_uuid, uuid);
+#else
 	acpi_str_to_uuid(acpi_dsm_uuid, uuid);
+#endif
 
 	spi_info = acpi_evaluate_dsm(handle, uuid, 1, 1, NULL);
 	if (!spi_info) {
