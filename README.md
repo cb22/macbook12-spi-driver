@@ -8,6 +8,18 @@ Additionally, you need to make sure the `spi_pxa2xx_platform` and `intel_lpss_pc
 
 The 2015 MacBook seems much more complicated, as the DMA controller isn't built in to the SPI controller. Unfortunately, I don't have a 2015 model to test.
 
+DKMS module (Debian & co):
+--------------------------
+As root, do the following:
+```
+apt install dkms
+git clone https://github.com/cb22/macbook12-spi-driver.git /usr/src/applespi-0.1
+dkms install -m applespi -v 0.1
+
+echo -e "\n# applespi\napplespi\nintel_lpss_pci\nspi_pxa2xx_platform" >> /etc/initramfs-tools/modules
+update-initramfs -u
+```
+
 What works:
 -----------
 * Basic Typing
