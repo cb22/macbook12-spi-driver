@@ -6,7 +6,7 @@ To get this driver to work on a 2016 12" MacBook or a 2016 MacBook Pro, you'll n
 
 Additionally, you need to make sure the `spi_pxa2xx_platform` and `intel_lpss_pci` modules are loaded. This should result in the intel-lpss driver attaching itself to the SPI controller. 
 
-The 2015 MacBook seems much more complicated, as the DMA controller isn't built in to the SPI controller. Unfortunately, I don't have a 2015 model to test.
+On the 2015 MacBook you currently need to (re)compile your kernel with `CONFIG_X86_INTEL_LPSS=n`.
 
 DKMS module (Debian & co):
 --------------------------
