@@ -406,13 +406,16 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 	struct spi_transfer t1;
 	struct spi_transfer t2;
 	struct spi_transfer t3;
+	struct spi_transfer t4;
 	struct spi_message m;
 	ssize_t ret;
 
 	applespi_setup_write_txfr(applespi, &t1, &t2);
 	t2.cs_change = 1;
-	applespi_setup_read_txfr(applespi, &t3);
-	applespi_setup_spi_message(&m, 3, &t1, &t2, &t3);
+	memset(&t3, 0, sizeof(t3));
+	t3.delay_usecs = applespi->spi_settings.reset_rec_usec;
+	applespi_setup_read_txfr(applespi, &t4);
+	applespi_setup_spi_message(&m, 4, &t1, &t2, &t3, &t4);
 
 	ret = applespi_sync(applespi, &m);
 
