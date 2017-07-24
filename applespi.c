@@ -122,7 +122,6 @@ struct appleacpi_spi_registration_info {
 	struct class_interface	cif;
 	struct acpi_device 	*adev;
 	struct spi_device 	*spi;
-	int			bus_num;
 	struct spi_master	*spi_master;
 	struct work_struct	work;
 	struct notifier_block	slave_notifier;
@@ -1389,14 +1388,19 @@ static int appleacpi_spi_master_added(struct device *dev,
 		container_of(dev, struct spi_master, dev);
 	struct appleacpi_spi_registration_info *info =
 		container_of(cif, struct appleacpi_spi_registration_info, cif);
+	struct acpi_device *master_adev = spi_master->dev.parent ?
+		ACPI_COMPANION(spi_master->dev.parent) : NULL;
 
-	pr_debug("New spi-master device with bus-number %d was added\n",
+	pr_debug("New spi-master device %s (%s) with bus-number %d was added\n",
+		 dev_name(&spi_master->dev),
+		 master_adev ? acpi_device_hid(master_adev) : "-no-acpi-dev-",
 		 spi_master->bus_num);
 
-	if (spi_master->bus_num != info->bus_num)
+	if (master_adev != info->adev->parent)
 		return 0;
 
-	pr_info("Got spi-master device for bus-number %d\n", info->bus_num);
+	pr_info("Got spi-master device for device %s\n",
+		acpi_device_hid(info->adev));
 
 	/*
 	 * mutexes are held here, preventing unregistering of physical devices,
@@ -1460,7 +1464,6 @@ static struct class *appleacpi_get_spi_master_class(void)
 static int appleacpi_probe(struct acpi_device *adev)
 {
 	struct appleacpi_spi_registration_info *reg_info;
-	int bus_num;
 	int ret;
 
 	pr_debug("Probing acpi-device %s: bus-id='%s', adr=%lu, uid='%s'\n",
@@ -1473,69 +1476,59 @@ static int appleacpi_probe(struct acpi_device *adev)
 		return ret;
 	}
 
-	if (acpi_device_uid(adev) &&
-	    !kstrtouint(acpi_device_uid(adev), 0, &bus_num)) {
-		/*
-		 * Ideally we would just call spi_register_board_info() here,
-		 * but that function is not exported. Additionally, we need to
-		 * perform some extra work during device creation, such as
-		 * unregistering physical devices. So instead we have do the
-		 * registration ourselves. For that we see if our spi-master
-		 * has been registered already, and if not jump through some
-		 * hoops to make sure we are notified when it does.
-		 */
+	/*
+	 * Ideally we would just call spi_register_board_info() here,
+	 * but that function is not exported. Additionally, we need to
+	 * perform some extra work during device creation, such as
+	 * unregistering physical devices. So instead we have do the
+	 * registration ourselves. For that we see if our spi-master
+	 * has been registered already, and if not jump through some
+	 * hoops to make sure we are notified when it does.
+	 */
 
-		reg_info = kzalloc(sizeof(*reg_info), GFP_KERNEL);
-		if (!reg_info) {
-			pr_err("Failed to allocate registration-info\n");
-			ret = -ENOMEM;
-			goto unregister_driver;
-		}
+	reg_info = kzalloc(sizeof(*reg_info), GFP_KERNEL);
+	if (!reg_info) {
+		pr_err("Failed to allocate registration-info\n");
+		ret = -ENOMEM;
+		goto unregister_driver;
+	}
 
-		reg_info->bus_num = bus_num;
-		reg_info->adev = adev;
-		INIT_WORK(&reg_info->work, appleacpi_dev_registration_worker);
+	reg_info->adev = adev;
+	INIT_WORK(&reg_info->work, appleacpi_dev_registration_worker);
 
-		adev->driver_data = reg_info;
+	adev->driver_data = reg_info;
 
-		/*
-		 * Set up listening for spi slave removals so we can properly
-		 * handle them.
-		 */
-		reg_info->slave_notifier.notifier_call =
-			appleacpi_spi_slave_changed;
-		ret = bus_register_notifier(&spi_bus_type,
-					    &reg_info->slave_notifier);
-		if (ret) {
-			pr_err("Failed to register notifier for spi slaves: "
-			       "%d\n", ret);
-			goto free_reg_info;
-		}
+	/*
+	 * Set up listening for spi slave removals so we can properly
+	 * handle them.
+	 */
+	reg_info->slave_notifier.notifier_call =
+		appleacpi_spi_slave_changed;
+	ret = bus_register_notifier(&spi_bus_type,
+				    &reg_info->slave_notifier);
+	if (ret) {
+		pr_err("Failed to register notifier for spi slaves: %d\n", ret);
+		goto free_reg_info;
+	}
 
-		/*
-		 * Listen for additions of spi-master devices so we can
-		 * register our spi device when the relevant master is added.
-		 * Note that our callback gets called immediately for all
-		 * existing master devices, so this takes care of registration
-		 * when the master already exists too.
-		 */
-		reg_info->cif.class = appleacpi_get_spi_master_class();
-		reg_info->cif.add_dev = appleacpi_spi_master_added;
+	/*
+	 * Listen for additions of spi-master devices so we can register our spi
+	 * device when the relevant master is added.  Note that our callback
+	 * gets called immediately for all existing master devices, so this
+	 * takes care of registration when the master already exists too.
+	 */
+	reg_info->cif.class = appleacpi_get_spi_master_class();
+	reg_info->cif.add_dev = appleacpi_spi_master_added;
 
-		ret = class_interface_register(&reg_info->cif);
-		if (ret) {
-			pr_err("Failed to register watcher for "
-			       "spi-master: %d\n", ret);
-			goto unregister_notifier;
-		}
+	ret = class_interface_register(&reg_info->cif);
+	if (ret) {
+		pr_err("Failed to register watcher for spi-master: %d\n", ret);
+		goto unregister_notifier;
+	}
 
-		if (!spi_busnum_to_master(bus_num)) {
-			pr_info("No spi-master device found for bus-number %d "
-				"- waiting for it to be registered\n", bus_num);
-		}
-	} else {
-		pr_warn("Non-numeric unique-id '%s' found on acpi-device %s",
-			acpi_device_uid(adev), acpi_device_hid(adev));
+	if (!reg_info->spi_master) {
+		pr_info("No spi-master device found for device %s - waiting "
+			"for it to be registered\n", acpi_device_hid(adev));
 	}
 
 	pr_info("acpi-device probe done: %s\n", acpi_device_hid(adev));
