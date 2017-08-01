@@ -146,7 +146,7 @@ struct appleacpi_spi_registration_info {
 	struct acpi_device 	*adev;
 	struct spi_device 	*spi;
 	struct spi_master	*spi_master;
-	struct work_struct	work;
+	struct delayed_work	work;
 	struct notifier_block	slave_notifier;
 };
 
@@ -1492,7 +1492,13 @@ release_master:
 static void appleacpi_dev_registration_worker(struct work_struct *work)
 {
 	struct appleacpi_spi_registration_info *info =
-		container_of(work, struct appleacpi_spi_registration_info, work);
+		container_of(work, struct appleacpi_spi_registration_info, work.work);
+
+	if (info->spi_master && !info->spi_master->running) {
+		pr_debug_ratelimited("spi-master device is not running yet\n");
+		schedule_delayed_work(&info->work, usecs_to_jiffies(100));
+		return;
+	}
 
 	appleacpi_register_spi_device(info->spi_master, info->adev);
 }
@@ -1526,7 +1532,7 @@ static int appleacpi_spi_master_added(struct device *dev,
 	 * so need to do the actual registration in a worker.
 	 */
 	info->spi_master = spi_master_get(spi_master);
-	schedule_work(&info->work);
+	schedule_delayed_work(&info->work, usecs_to_jiffies(100));
 
 	return 0;
 }
@@ -1613,7 +1619,7 @@ static int appleacpi_probe(struct acpi_device *adev)
 	}
 
 	reg_info->adev = adev;
-	INIT_WORK(&reg_info->work, appleacpi_dev_registration_worker);
+	INIT_DELAYED_WORK(&reg_info->work, appleacpi_dev_registration_worker);
 
 	adev->driver_data = reg_info;
 
@@ -1673,7 +1679,7 @@ static int appleacpi_remove(struct acpi_device *adev)
 		class_interface_unregister(&reg_info->cif);
 		bus_unregister_notifier(&spi_bus_type,
 					&reg_info->slave_notifier);
-		cancel_work_sync(&reg_info->work);
+		cancel_delayed_work_sync(&reg_info->work);
 		if (reg_info->spi)
 			spi_unregister_device(reg_info->spi);
 		kfree(reg_info);
