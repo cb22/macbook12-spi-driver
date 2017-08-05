@@ -390,9 +390,12 @@ applespi_debug_facility(unsigned log_mask)
 
 static void
 applespi_setup_read_txfr(struct applespi_data *applespi,
-			 struct spi_transfer *rd_t)
+			 struct spi_transfer *dl_t, struct spi_transfer *rd_t)
 {
+	memset(dl_t, 0, sizeof *dl_t);
 	memset(rd_t, 0, sizeof *rd_t);
+
+	dl_t->delay_usecs = applespi->spi_settings.reset_a2r_usec;
 
 	rd_t->rx_buf = applespi->rx_buffer;
 	rd_t->len = APPLESPI_PACKET_SIZE;
@@ -486,9 +489,7 @@ applespi_sync_write_and_response(struct applespi_data *applespi,
 
 	applespi_setup_write_txfr(applespi, &t1, &t2);
 	t2.cs_change = 1;
-	memset(&t3, 0, sizeof(t3));
-	t3.delay_usecs = applespi->spi_settings.reset_rec_usec;
-	applespi_setup_read_txfr(applespi, &t4);
+	applespi_setup_read_txfr(applespi, &t3, &t4);
 	applespi_setup_spi_message(&m, 4, &t1, &t2, &t3, &t4);
 
 	ret = applespi_sync(applespi, &m);
@@ -510,12 +511,13 @@ applespi_sync_write_and_response(struct applespi_data *applespi,
 static inline ssize_t
 applespi_sync_read(struct applespi_data *applespi, unsigned log_mask)
 {
+	struct spi_transfer d;
 	struct spi_transfer t;
 	struct spi_message m;
 	ssize_t ret;
 
-	applespi_setup_read_txfr(applespi, &t);
-	applespi_setup_spi_message(&m, 1, &t);
+	applespi_setup_read_txfr(applespi, &d, &t);
+	applespi_setup_spi_message(&m, 2, &d, &t);
 
 	ret = applespi_sync(applespi, &m);
 
@@ -1043,9 +1045,7 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 	debug_print(DBG_RD_IRQ, "--- %s ---------------------------\n",
 		    applespi_debug_facility(DBG_RD_IRQ));
 
-	memset(&applespi->dl_t, 0, sizeof(applespi->dl_t));
-	applespi->dl_t.delay_usecs = applespi->spi_settings.reset_a2r_usec;
-	applespi_setup_read_txfr(applespi, &applespi->rd_t);
+	applespi_setup_read_txfr(applespi, &applespi->dl_t, &applespi->rd_t);
 	applespi_setup_spi_message(&applespi->rd_m, 2, &applespi->dl_t, &applespi->rd_t);
 
 	applespi_async(applespi, &applespi->rd_m, applespi_async_read_complete);
