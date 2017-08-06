@@ -32,6 +32,9 @@
 #include <linux/workqueue.h>
 #include <linux/notifier.h>
 #include <linux/leds.h>
+#if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
+#include <linux/ktime.h>
+#endif
 
 #include <linux/input.h>
 #include <linux/input/mt.h>
@@ -270,8 +273,8 @@ static u8 *acpi_dsm_uuid = "a0b5b7c6-1318-441c-b0c9-fe695eaf949b";
 
 static struct applespi_tp_info applespi_macbookpro131_info = { -6243, 6749, -170, 7685 };
 static struct applespi_tp_info applespi_macbookpro133_info = { -7456, 7976, -163, 9283 };
-// MacBook11, MacBook12
-static struct applespi_tp_info applespi_default_info = { -4828, 5345, -203, 6803 };
+// MacBook8, MacBook9, MacBook10
+static struct applespi_tp_info applespi_default_info = { -5087, 5579, -182, 6089 };
 
 static const struct dmi_system_id applespi_touchpad_infos[] = {
 	{
@@ -295,6 +298,30 @@ static const struct dmi_system_id applespi_touchpad_infos[] = {
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
 			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro13,3")
+		},
+		.driver_data = &applespi_macbookpro133_info,
+	},
+	{
+		.ident = "Apple MacBookPro14,1",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro14,1")
+		},
+		.driver_data = &applespi_macbookpro131_info,
+	},
+	{
+		.ident = "Apple MacBookPro14,2",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro14,2")
+		},
+		.driver_data = &applespi_macbookpro131_info,	// same touchpad
+	},
+	{
+		.ident = "Apple MacBookPro14,3",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro14,3")
 		},
 		.driver_data = &applespi_macbookpro133_info,
 	},
@@ -769,6 +796,35 @@ static void report_finger_data(struct input_dev *input, int slot,
 
 static int report_tp_state(struct applespi_data *applespi, struct touchpad_protocol* t)
 {
+#if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
+	static int min_x = 0, max_x = 0, min_y = 0, max_y = 0;
+	static bool dim_updated = false;
+	static ktime_t last_print = 0;
+
+#define UPDATE_DIMENSIONS(val, op, last) \
+		if (raw2int(val) op last) { \
+			last = raw2int(val); \
+			dim_updated = true; \
+		}
+
+#define	DEBUG_FMT	"New touchpad dimensions: %d %d %d %d\n"
+#define	DEBUG_ARGS	min_x, max_x, min_y, max_y
+
+#if defined(DEBUG)
+
+#define APPLESPI_DEBUG_RANGES()		true
+#define APPLESPI_PRINT_RANGES() \
+		pr_debug(DEBUG_FMT, DEBUG_ARGS)
+
+#elif defined(CONFIG_DYNAMIC_DEBUG)
+
+        DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, DEBUG_FMT);
+#define APPLESPI_DEBUG_RANGES()		DYNAMIC_DEBUG_BRANCH(descriptor)
+#define APPLESPI_PRINT_RANGES() \
+		__dynamic_pr_debug(&descriptor, pr_fmt(DEBUG_FMT), DEBUG_ARGS)
+
+#endif
+#endif
 	const struct tp_finger *f;
 	struct input_dev *input = applespi->touchpad_input_dev;
 	const struct applespi_tp_info *tp_info = applespi->tp_info;
@@ -783,7 +839,27 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 		applespi->pos[n].x = raw2int(f->abs_x);
 		applespi->pos[n].y = tp_info->y_min + tp_info->y_max - raw2int(f->abs_y);
 		n++;
+
+#if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
+		if (APPLESPI_DEBUG_RANGES()) {
+			UPDATE_DIMENSIONS(f->abs_x, <, min_x);
+			UPDATE_DIMENSIONS(f->abs_x, >, max_x);
+			UPDATE_DIMENSIONS(f->abs_y, <, min_y);
+			UPDATE_DIMENSIONS(f->abs_y, >, max_y);
+		}
+#endif
 	}
+
+#if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
+	if (APPLESPI_DEBUG_RANGES()) {
+		if (dim_updated &&
+		    ktime_ms_delta(ktime_get(), last_print) > 1000) {
+			APPLESPI_PRINT_RANGES();
+			dim_updated = false;
+			last_print = ktime_get();
+		}
+	}
+#endif
 
 	input_mt_assign_slots(input, applespi->slots, applespi->pos, n, 0);
 
