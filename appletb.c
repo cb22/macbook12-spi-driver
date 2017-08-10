@@ -271,21 +271,22 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	unsigned char current_disp;
 	bool any_tb_key_pressed, need_reschedule;
 	int rc1 = 1, rc2 = 1;
+	unsigned long flags;
 
-	spin_lock(&tb_data->tb_mode_lock);
+	spin_lock_irqsave(&tb_data->tb_mode_lock, flags);
 
 	/* handle explicit mode-change request */
 	pending_mode = tb_data->pnd_tb_mode;
 	pending_disp = tb_data->pnd_tb_disp;
 
-	spin_unlock(&tb_data->tb_mode_lock);
+	spin_unlock_irqrestore(&tb_data->tb_mode_lock, flags);
 
 	if (pending_mode != APPLETB_CMD_MODE_NONE)
 		rc1 = appletb_set_tb_mode(tb_data, pending_mode);
 	if (pending_disp != APPLETB_CMD_DISP_NONE)
 		rc2 = appletb_set_tb_disp(tb_data, pending_disp);
 
-	spin_lock(&tb_data->tb_mode_lock);
+	spin_lock_irqsave(&tb_data->tb_mode_lock, flags);
 
 	need_reschedule = false;
 
@@ -334,7 +335,7 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 
 	any_tb_key_pressed = appletb_any_tb_key_pressed(tb_data);
 
-	spin_unlock(&tb_data->tb_mode_lock);
+	spin_unlock_irqrestore(&tb_data->tb_mode_lock, flags);
 
 	/* a new command arrived while we were busy - handle it */
 	if (need_reschedule) {
@@ -361,9 +362,9 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 						     APPLETB_CMD_DISP_DIM;
 		if (next_disp != current_disp &&
 		    appletb_set_tb_disp(tb_data, next_disp) == 0) {
-			spin_lock(&tb_data->tb_mode_lock);
+			spin_lock_irqsave(&tb_data->tb_mode_lock, flags);
 			tb_data->cur_tb_disp = next_disp;
-			spin_unlock(&tb_data->tb_mode_lock);
+			spin_unlock_irqrestore(&tb_data->tb_mode_lock, flags);
 		}
 
 		if (time_to_off > 0)
