@@ -43,8 +43,10 @@
 #define APPLESPI_PACKET_SIZE    256
 #define APPLESPI_STATUS_SIZE    4
 
-#define PACKET_KEYBOARD         288
-#define PACKET_TOUCHPAD         544
+#define PACKET_TYPE_READ        0x20
+#define PACKET_TYPE_WRITE       0x40
+#define PACKET_DEV_KEYB         0x01
+#define PACKET_DEV_TPAD         0x02
 
 #define MAX_ROLLOVER 		6
 
@@ -94,7 +96,8 @@ MODULE_PARM_DESC(debug, "Enable/Disable debug logging. This is a bitmask.");
 
 
 struct keyboard_protocol {
-	u16		packet_type;
+	u8		packet_type;
+	u8		device;
 	u8		unknown1[9];
 	u8		counter;
 	u8		unknown2[5];
@@ -125,7 +128,8 @@ struct tp_finger {
 } __attribute__((packed,aligned(2)));
 
 struct touchpad_protocol {
-	u16			packet_type;
+	u8			packet_type;
+	u8			device;
 	u8			unknown1[4];
 	u8			number_of_fingers;
 	u8			unknown2[4];
@@ -472,25 +476,21 @@ applespi_check_write_status(struct applespi_data *applespi, int sts)
 }
 
 static inline ssize_t
-applespi_sync_write_and_response(struct applespi_data *applespi,
-				 unsigned log_mask)
+applespi_sync_write(struct applespi_data *applespi, unsigned log_mask)
 {
 	/*
 	The Windows driver always seems to do a 256 byte write, followed
 	by a 4 byte read with CS still the same, followed by a toggling of
-	CS and a 256 byte read for the real response.
+	CS and a 256 byte read for the real response. We will get the real
+	response on a read after an interrupt.
 	*/
 	struct spi_transfer t1;
 	struct spi_transfer t2;
-	struct spi_transfer t3;
-	struct spi_transfer t4;
 	struct spi_message m;
 	ssize_t ret;
 
 	applespi_setup_write_txfr(applespi, &t1, &t2);
-	t2.cs_change = 1;
-	applespi_setup_read_txfr(applespi, &t3, &t4);
-	applespi_setup_spi_message(&m, 4, &t1, &t2, &t3, &t4);
+	applespi_setup_spi_message(&m, 2, &t1, &t2);
 
 	ret = applespi_sync(applespi, &m);
 
@@ -500,8 +500,6 @@ applespi_sync_write_and_response(struct applespi_data *applespi,
 			   APPLESPI_PACKET_SIZE);
 	debug_print_buffer(log_mask, "status ", applespi->tx_status,
 			   APPLESPI_STATUS_SIZE);
-	debug_print_buffer(log_mask, "read   ", applespi->rx_buffer,
-			   APPLESPI_PACKET_SIZE);
 
 	applespi_check_write_status(applespi, ret);
 
@@ -662,9 +660,10 @@ static void applespi_init(struct applespi_data *applespi)
 	// Do a read to flush the trackpad
 	applespi_sync_read(applespi, DBG_CMD_TP_INI);
 
+	applespi->cmd_log_mask = DBG_CMD_TP_INI;
 	for (i=0; i < items; i++) {
 		memcpy(applespi->tx_buffer, applespi_init_commands[i], 256);
-		applespi_sync_write_and_response(applespi, DBG_CMD_TP_INI);
+		applespi_sync_write(applespi, DBG_CMD_TP_INI);
 	}
 
 	pr_info("modeswitch done.\n");
@@ -1012,20 +1011,30 @@ applespi_got_data(struct applespi_data *applespi)
 	struct keyboard_protocol *keyboard_protocol;
 
 	keyboard_protocol = (struct keyboard_protocol*) applespi->rx_buffer;
-	if (keyboard_protocol->packet_type == PACKET_KEYBOARD) {
+	if (keyboard_protocol->packet_type == PACKET_TYPE_READ &&
+	    keyboard_protocol->device == PACKET_DEV_KEYB) {
 		debug_print(DBG_RD_KEYB, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_KEYB));
 		debug_print_buffer(DBG_RD_KEYB, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 
 		applespi_handle_keyboard_event(applespi, keyboard_protocol);
-	} else if (keyboard_protocol->packet_type == PACKET_TOUCHPAD) {
+
+	} else if (keyboard_protocol->packet_type == PACKET_TYPE_READ &&
+		   keyboard_protocol->device == PACKET_DEV_TPAD) {
 		debug_print(DBG_RD_TPAD, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_TPAD));
 		debug_print_buffer(DBG_RD_TPAD, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 
 		report_tp_state(applespi, (struct touchpad_protocol*) keyboard_protocol);
+
+	} else if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE) {
+		debug_print(applespi->cmd_log_mask,
+			    "--- %s ---------------------------\n",
+			    applespi_debug_facility(applespi->cmd_log_mask));
+		debug_print_buffer(applespi->cmd_log_mask, "read   ",
+				   applespi->rx_buffer, APPLESPI_PACKET_SIZE);
 	} else {
 		debug_print(DBG_RD_UNKN, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_UNKN));
@@ -1200,9 +1209,6 @@ static int applespi_probe(struct spi_device *spi)
 		return -ENODEV;
 	}
 
-	/* Switch the touchpad into multitouch mode */
-	applespi_init(applespi);
-
 	/*
 	 * The applespi device doesn't send interrupts normally (as is described
 	 * in its DSDT), but rather seems to use ACPI GPEs.
@@ -1229,6 +1235,9 @@ static int applespi_probe(struct spi_device *spi)
 		acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
 		return -ENODEV;
 	}
+
+	/* Switch the touchpad into multitouch mode */
+	applespi_init(applespi);
 
 	/* set up keyboard-backlight */
 	applespi->backlight_info.name            = "spi::kbd_backlight";
