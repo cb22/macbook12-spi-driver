@@ -79,6 +79,7 @@
 #define APPLE_FLAG_FKEY		0x01
 
 #define SPI_DEV_CHIP_SEL	0	// from DSDT UBUF
+#define SPI_RW_CHG_DLY		100	/* from experimentation, in us */
 
 static unsigned int fnmode = 1;
 module_param(fnmode, uint, 0644);
@@ -160,7 +161,7 @@ struct spi_settings {
 	u64	spi_bit_order;   	/* 1 = MSB_FIRST, 0 = LSB_FIRST */
 	u64	spi_spo;        	/* clock polarity: 0 = low, 1 = high */
 	u64	spi_sph;		/* clock phase: 0 = first, 1 = second */
-	u64	spi_cs_delay;    	/* in 10us (?) */
+	u64	spi_cs_delay;    	/* cs-to-clk delay in us */
 	u64	reset_a2r_usec;  	/* active-to-receive delay? */
 	u64	reset_rec_usec;  	/* ? (cur val: 10) */
 };
@@ -214,6 +215,7 @@ struct applespi_data {
 	struct spi_transfer		rd_t;
 	struct spi_message		rd_m;
 
+	struct spi_transfer		wd_t;
 	struct spi_transfer		wr_t;
 	struct spi_transfer		st_t;
 	struct spi_message		wr_m;
@@ -399,27 +401,29 @@ applespi_setup_read_txfr(struct applespi_data *applespi,
 	memset(dl_t, 0, sizeof *dl_t);
 	memset(rd_t, 0, sizeof *rd_t);
 
-	dl_t->delay_usecs = applespi->spi_settings.reset_a2r_usec;
+	dl_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
 
 	rd_t->rx_buf = applespi->rx_buffer;
 	rd_t->len = APPLESPI_PACKET_SIZE;
-	rd_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
 }
 
 static void
 applespi_setup_write_txfr(struct applespi_data *applespi,
-			  struct spi_transfer *wr_t, struct spi_transfer *st_t)
+			  struct spi_transfer *dl_t, struct spi_transfer *wr_t,
+			  struct spi_transfer *st_t)
 {
+	memset(dl_t, 0, sizeof *dl_t);
 	memset(wr_t, 0, sizeof *wr_t);
 	memset(st_t, 0, sizeof *st_t);
 
+	dl_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
+
 	wr_t->tx_buf = applespi->tx_buffer;
 	wr_t->len = APPLESPI_PACKET_SIZE;
-	wr_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
+	wr_t->delay_usecs = SPI_RW_CHG_DLY;
 
 	st_t->rx_buf = applespi->tx_status;
 	st_t->len = APPLESPI_STATUS_SIZE;
-	st_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
 }
 
 static void
@@ -492,11 +496,12 @@ applespi_sync_write(struct applespi_data *applespi, unsigned log_mask)
 	*/
 	struct spi_transfer t1;
 	struct spi_transfer t2;
+	struct spi_transfer t3;
 	struct spi_message m;
 	ssize_t ret;
 
-	applespi_setup_write_txfr(applespi, &t1, &t2);
-	applespi_setup_spi_message(&m, 2, &t1, &t2);
+	applespi_setup_write_txfr(applespi, &t1, &t2, &t3);
+	applespi_setup_spi_message(&m, 3, &t1, &t2, &t3);
 
 	ret = applespi_sync(applespi, &m);
 
@@ -609,9 +614,6 @@ static int applespi_get_spi_settings(acpi_handle handle,
 		*field = le64_to_cpu(*((__le64 *) value.buffer.pointer));
 	}
 	ACPI_FREE(spi_info);
-
-	/* acpi provided value is in 10us units */
-	settings->spi_cs_delay *= 10;
 
 	return 0;
 }
@@ -764,9 +766,10 @@ applespi_send_cmd_msg(struct applespi_data *applespi)
 	}
 
 	/* send command */
-	applespi_setup_write_txfr(applespi, &applespi->wr_t, &applespi->st_t);
-	applespi_setup_spi_message(&applespi->wr_m, 2, &applespi->wr_t,
-				   &applespi->st_t);
+	applespi_setup_write_txfr(applespi, &applespi->wd_t, &applespi->wr_t,
+				  &applespi->st_t);
+	applespi_setup_spi_message(&applespi->wr_m, 3, &applespi->wd_t,
+				   &applespi->wr_t, &applespi->st_t);
 
 	sts = applespi_async(applespi, &applespi->wr_m,
 			     applespi_async_write_complete);
@@ -1049,13 +1052,21 @@ applespi_got_data(struct applespi_data *applespi)
 		debug_print_buffer(applespi->cmd_log_mask, "read   ",
 				   applespi->rx_buffer, APPLESPI_PACKET_SIZE);
 
-		applespi_cmd_msg_complete(applespi);
 	} else {
 		debug_print(DBG_RD_UNKN, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_UNKN));
 		debug_print_buffer(DBG_RD_UNKN, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 	}
+
+	/* Note: this relies on the fact that we are blocking the processing of
+	 * spi messages at this point, i.e. that no further transfers or cs
+	 * changes are processed while we delay here.
+	 */
+	udelay(SPI_RW_CHG_DLY);
+
+	if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE)
+		applespi_cmd_msg_complete(applespi);
 }
 
 static void applespi_async_read_complete(void *context)
