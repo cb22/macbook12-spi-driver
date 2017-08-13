@@ -954,70 +954,78 @@ applespi_code_to_key(u8 code, int fn_pressed)
 }
 
 static void
-applespi_got_data(struct applespi_data *applespi)
+applespi_handle_keyboard_event(struct applespi_data *applespi,
+			       struct keyboard_protocol *keyboard_protocol)
 {
-	struct keyboard_protocol keyboard_protocol;
 	int i, j;
 	unsigned int key;
 	bool still_pressed;
 
-	memcpy(&keyboard_protocol, applespi->rx_buffer, APPLESPI_PACKET_SIZE);
-	if (keyboard_protocol.packet_type == PACKET_KEYBOARD) {
+	for (i=0; i<6; i++) {
+		still_pressed = false;
+		for (j=0; j<6; j++) {
+			if (applespi->last_keys_pressed[i] == keyboard_protocol->keys_pressed[j]) {
+				still_pressed = true;
+				break;
+			}
+		}
+
+		if (! still_pressed) {
+			key = applespi_code_to_key(applespi->last_keys_pressed[i], applespi->last_keys_fn_pressed[i]);
+			input_report_key(applespi->keyboard_input_dev, key, 0);
+			applespi->last_keys_fn_pressed[i] = 0;
+		}
+	}
+
+	for (i=0; i<6; i++) {
+		if (keyboard_protocol->keys_pressed[i] < ARRAY_SIZE(applespi_scancodes) && keyboard_protocol->keys_pressed[i] > 0) {
+			key = applespi_code_to_key(keyboard_protocol->keys_pressed[i], keyboard_protocol->fn_pressed);
+			input_report_key(applespi->keyboard_input_dev, key, 1);
+			applespi->last_keys_fn_pressed[i] = keyboard_protocol->fn_pressed;
+		}
+	}
+
+	// Check control keys
+	for (i=0; i<8; i++) {
+		if (test_bit(i, (long unsigned int *)&keyboard_protocol->modifiers)) {
+			input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 1);
+		} else {
+			input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 0);
+		}
+	}
+
+	// Check function key
+	if (keyboard_protocol->fn_pressed && !applespi->last_fn_pressed) {
+		input_report_key(applespi->keyboard_input_dev, KEY_FN, 1);
+	} else if (!keyboard_protocol->fn_pressed && applespi->last_fn_pressed) {
+		input_report_key(applespi->keyboard_input_dev, KEY_FN, 0);
+	}
+	applespi->last_fn_pressed = keyboard_protocol->fn_pressed;
+
+	input_sync(applespi->keyboard_input_dev);
+	memcpy(&applespi->last_keys_pressed, keyboard_protocol->keys_pressed, sizeof(applespi->last_keys_pressed));
+}
+
+static void
+applespi_got_data(struct applespi_data *applespi)
+{
+	struct keyboard_protocol *keyboard_protocol;
+
+	keyboard_protocol = (struct keyboard_protocol*) applespi->rx_buffer;
+	if (keyboard_protocol->packet_type == PACKET_KEYBOARD) {
 		debug_print(DBG_RD_KEYB, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_KEYB));
 		debug_print_buffer(DBG_RD_KEYB, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 
-		for (i=0; i<6; i++) {
-			still_pressed = false;
-			for (j=0; j<6; j++) {
-				if (applespi->last_keys_pressed[i] == keyboard_protocol.keys_pressed[j]) {
-					still_pressed = true;
-					break;
-				}
-			}
-
-			if (! still_pressed) {
-				key = applespi_code_to_key(applespi->last_keys_pressed[i], applespi->last_keys_fn_pressed[i]);
-				input_report_key(applespi->keyboard_input_dev, key, 0);
-				applespi->last_keys_fn_pressed[i] = 0;
-			}
-		}
-
-		for (i=0; i<6; i++) {
-			if (keyboard_protocol.keys_pressed[i] < ARRAY_SIZE(applespi_scancodes) && keyboard_protocol.keys_pressed[i] > 0) {
-				key = applespi_code_to_key(keyboard_protocol.keys_pressed[i], keyboard_protocol.fn_pressed);
-				input_report_key(applespi->keyboard_input_dev, key, 1);
-				applespi->last_keys_fn_pressed[i] = keyboard_protocol.fn_pressed;
-			}
-		}
-
-		// Check control keys
-		for (i=0; i<8; i++) {
-			if (test_bit(i, (long unsigned int *)&keyboard_protocol.modifiers)) {
-				input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 1);
-			} else {
-				input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 0);
-			}
-		}
-
-		// Check function key
-		if (keyboard_protocol.fn_pressed && !applespi->last_fn_pressed) {
-			input_report_key(applespi->keyboard_input_dev, KEY_FN, 1);
-		} else if (!keyboard_protocol.fn_pressed && applespi->last_fn_pressed) {
-			input_report_key(applespi->keyboard_input_dev, KEY_FN, 0);
-		}
-		applespi->last_fn_pressed = keyboard_protocol.fn_pressed;
-
-		input_sync(applespi->keyboard_input_dev);
-		memcpy(&applespi->last_keys_pressed, keyboard_protocol.keys_pressed, sizeof(applespi->last_keys_pressed));
-	} else if (keyboard_protocol.packet_type == PACKET_TOUCHPAD) {
+		applespi_handle_keyboard_event(applespi, keyboard_protocol);
+	} else if (keyboard_protocol->packet_type == PACKET_TOUCHPAD) {
 		debug_print(DBG_RD_TPAD, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_TPAD));
 		debug_print_buffer(DBG_RD_TPAD, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 
-		report_tp_state(applespi, (struct touchpad_protocol*)&keyboard_protocol);
+		report_tp_state(applespi, (struct touchpad_protocol*) keyboard_protocol);
 	} else {
 		debug_print(DBG_RD_UNKN, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_UNKN));
