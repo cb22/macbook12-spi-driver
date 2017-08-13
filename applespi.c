@@ -517,30 +517,6 @@ applespi_sync_write(struct applespi_data *applespi, unsigned log_mask)
 	return ret;
 }
 
-static inline ssize_t
-applespi_sync_read(struct applespi_data *applespi, unsigned log_mask)
-{
-	struct spi_transfer d;
-	struct spi_transfer t;
-	struct spi_message m;
-	ssize_t ret;
-
-	applespi_setup_read_txfr(applespi, &d, &t);
-	applespi_setup_spi_message(&m, 2, &d, &t);
-
-	ret = applespi_sync(applespi, &m);
-
-	debug_print(log_mask, "--- %s ---------------------------\n",
-		    applespi_debug_facility(log_mask));
-	debug_print_buffer(log_mask, "read   ", applespi->rx_buffer,
-			   APPLESPI_PACKET_SIZE);
-
-	if (ret < 0)
-		pr_warn("Error reading from device: %ld\n", ret);
-
-	return ret;
-}
-
 static int applespi_find_settings_field(const char *name)
 {
 	int i;
@@ -664,9 +640,6 @@ static void applespi_init(struct applespi_data *applespi)
 {
 	int i;
 	ssize_t items = ARRAY_SIZE(applespi_init_commands);
-
-	// Do a read to flush the trackpad
-	applespi_sync_read(applespi, DBG_CMD_TP_INI);
 
 	applespi->cmd_log_mask = DBG_CMD_TP_INI;
 	applespi->cmd_msg_queued = true;
