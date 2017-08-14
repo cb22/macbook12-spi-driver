@@ -462,17 +462,23 @@ applespi_async(struct applespi_data *applespi, struct spi_message *message,
 	return spi_async(applespi->spi, message);
 }
 
-static inline void
+static inline bool
 applespi_check_write_status(struct applespi_data *applespi, int sts)
 {
-	u8 sts_ok[] = { 0xac, 0x27, 0x68, 0xd5 };
+	static u8 sts_ok[] = { 0xac, 0x27, 0x68, 0xd5 };
+	bool ret = true;
 
-	if (sts < 0)
+	if (sts < 0) {
+		ret = false;
 		pr_warn("Error writing to device: %d\n", sts);
-	else if (memcmp(applespi->tx_status, sts_ok, APPLESPI_STATUS_SIZE) != 0)
+	} else if (memcmp(applespi->tx_status, sts_ok, APPLESPI_STATUS_SIZE) != 0) {
+		ret = false;
 		pr_warn("Error writing to device: %x %x %x %x\n",
 			applespi->tx_status[0], applespi->tx_status[1],
 			applespi->tx_status[2], applespi->tx_status[3]);
+	}
+
+	return ret;
 }
 
 static inline ssize_t
@@ -661,6 +667,8 @@ static void applespi_init(struct applespi_data *applespi)
 	applespi_sync_read(applespi, DBG_CMD_TP_INI);
 
 	applespi->cmd_log_mask = DBG_CMD_TP_INI;
+	applespi->cmd_msg_queued = true;
+
 	for (i=0; i < items; i++) {
 		memcpy(applespi->tx_buffer, applespi_init_commands[i], 256);
 		applespi_sync_write(applespi, DBG_CMD_TP_INI);
@@ -671,10 +679,21 @@ static void applespi_init(struct applespi_data *applespi)
 
 static int applespi_send_cmd_msg(struct applespi_data *applespi);
 
+static void applespi_cmd_msg_complete(struct applespi_data *applespi)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	applespi->cmd_msg_queued = false;
+	applespi_send_cmd_msg(applespi);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+}
+
 static void applespi_async_write_complete(void *context)
 {
 	struct applespi_data *applespi = context;
-	unsigned long flags;
 
 	debug_print(applespi->cmd_log_mask, "--- %s ---------------------------\n",
 		    applespi_debug_facility(applespi->cmd_log_mask));
@@ -683,14 +702,8 @@ static void applespi_async_write_complete(void *context)
 	debug_print_buffer(applespi->cmd_log_mask, "status ", applespi->tx_status,
 			   APPLESPI_STATUS_SIZE);
 
-	applespi_check_write_status(applespi, applespi->wr_m.status);
-
-	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
-
-	applespi->cmd_msg_queued = false;
-	applespi_send_cmd_msg(applespi);
-
-	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+	if (!applespi_check_write_status(applespi, applespi->wr_m.status))
+		applespi_cmd_msg_complete(applespi);
 }
 
 static int
@@ -1035,6 +1048,8 @@ applespi_got_data(struct applespi_data *applespi)
 			    applespi_debug_facility(applespi->cmd_log_mask));
 		debug_print_buffer(applespi->cmd_log_mask, "read   ",
 				   applespi->rx_buffer, APPLESPI_PACKET_SIZE);
+
+		applespi_cmd_msg_complete(applespi);
 	} else {
 		debug_print(DBG_RD_UNKN, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_UNKN));
