@@ -1058,12 +1058,24 @@ static int applespi_probe(struct spi_device *spi)
 	int result, i;
 	long long unsigned int gpe, usb_status;
 
+	/* Check if the USB interface is present and enabled already */
+	result = acpi_evaluate_integer(ACPI_HANDLE(&spi->dev), "UIST", NULL, &usb_status);
+	if (ACPI_SUCCESS(result) && usb_status) {
+		/* Let the USB driver take over instead */
+		pr_info("USB interface already enabled\n");
+		return -ENODEV;
+	}
+
 	/* Allocate driver data */
 	applespi = devm_kzalloc(&spi->dev, sizeof(*applespi), GFP_KERNEL);
 	if (!applespi)
 		return -ENOMEM;
 
 	applespi->spi = spi;
+	applespi->handle = ACPI_HANDLE(&spi->dev);
+
+	/* Store the driver data */
+	spi_set_drvdata(spi, applespi);
 
 	/* Create our buffers */
 	applespi->tx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE, GFP_KERNEL);
@@ -1073,8 +1085,21 @@ static int applespi_probe(struct spi_device *spi)
 	if (!applespi->tx_buffer || !applespi->tx_status || !applespi->rx_buffer)
 		return -ENOMEM;
 
-	/* Store the driver data */
-	spi_set_drvdata(spi, applespi);
+	/* Cache ACPI method handles */
+	if (ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIEN", &applespi->sien)) ||
+	    ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIST", &applespi->sist))) {
+		pr_err("Failed to get required ACPI method handle\n");
+		return -ENODEV;
+	}
+
+	/* Switch on the SPI interface */
+	result = applespi_setup_spi(applespi);
+	if (result)
+		return result;
+
+	result = applespi_enable_spi(applespi);
+	if (result)
+		return result;
 
 	/* Set up touchpad dimensions */
 	applespi->tp_info = dmi_first_match(applespi_touchpad_infos)->driver_data;
@@ -1166,32 +1191,6 @@ static int applespi_probe(struct spi_device *spi)
 		       result);
 		return -ENODEV;
 	}
-
-	applespi->handle = ACPI_HANDLE(&spi->dev);
-
-	/* Check if the USB interface is present and enabled already */
-	result = acpi_evaluate_integer(applespi->handle, "UIST", NULL, &usb_status);
-	if (ACPI_SUCCESS(result) && usb_status) {
-		/* Let the USB driver take over instead */
-		pr_info("USB interface already enabled\n");
-		return -ENODEV;
-	}
-
-	/* Cache ACPI method handles */
-	if (ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIEN", &applespi->sien)) ||
-	    ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIST", &applespi->sist))) {
-		pr_err("Failed to get required ACPI method handle\n");
-		return -ENODEV;
-	}
-
-	/* Switch on the SPI interface */
-	result = applespi_setup_spi(applespi);
-	if (result)
-		return result;
-
-	result = applespi_enable_spi(applespi);
-	if (result)
-		return result;
 
 	/* Switch the touchpad into multitouch mode */
 	applespi_init(applespi);
