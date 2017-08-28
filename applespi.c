@@ -30,6 +30,7 @@
 #include <linux/crc16.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
+#include <linux/wait.h>
 #include <linux/notifier.h>
 #include <linux/leds.h>
 #if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
@@ -231,6 +232,11 @@ struct applespi_data {
 	unsigned			cmd_log_mask;
 
 	struct led_classdev		backlight_info;
+
+	bool				drain;
+	wait_queue_head_t		drain_complete;
+	bool				read_active;
+	bool				write_active;
 };
 
 static const unsigned char applespi_scancodes[] = {
@@ -557,6 +563,7 @@ static int applespi_setup_spi(struct applespi_data *applespi)
 		return sts;
 
 	spin_lock_init(&applespi->cmd_msg_lock);
+	init_waitqueue_head(&applespi->drain_complete);
 
 	return 0;
 }
@@ -623,6 +630,10 @@ applespi_send_cmd_msg(struct applespi_data *applespi)
 {
 	u16 crc;
 	int sts;
+
+	/* check if draining */
+	if (applespi->drain)
+		return 0;
 
 	/* check whether send is in progress */
 	if (applespi->cmd_msg_queued)
@@ -696,10 +707,13 @@ applespi_send_cmd_msg(struct applespi_data *applespi)
 	sts = applespi_async(applespi, &applespi->wr_m,
 			     applespi_async_write_complete);
 
-	if (sts != 0)
+	if (sts != 0) {
 		pr_warn("Error queueing async write to device: %d\n", sts);
-	else
+	} else {
 		applespi->cmd_msg_queued = true;
+		applespi->write_active = true;
+	}
+
 
 	return sts;
 }
@@ -969,6 +983,7 @@ static void
 applespi_got_data(struct applespi_data *applespi)
 {
 	struct keyboard_protocol *keyboard_protocol;
+	unsigned long flags;
 
 	keyboard_protocol = (struct keyboard_protocol*) applespi->rx_buffer;
 	if (keyboard_protocol->packet_type == PACKET_TYPE_READ &&
@@ -1010,6 +1025,19 @@ applespi_got_data(struct applespi_data *applespi)
 	 */
 	udelay(SPI_RW_CHG_DLY);
 
+	/* handle draining */
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	applespi->read_active = false;
+	if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE)
+		applespi->write_active = false;
+
+	if (applespi->drain && !applespi->write_active)
+		wake_up_all(&applespi->drain_complete);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
+	/* notify write complete */
 	if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE)
 		applespi_cmd_msg_complete(applespi);
 }
@@ -1029,6 +1057,7 @@ static void applespi_async_read_complete(void *context)
 static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 {
 	struct applespi_data *applespi = context;
+	int sts;
 	unsigned long flags;
 
 	debug_print(DBG_RD_IRQ, "--- %s ---------------------------\n",
@@ -1038,7 +1067,13 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 	applespi_setup_spi_message(&applespi->rd_m, 2, &applespi->dl_t, &applespi->rd_t);
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
-	applespi_async(applespi, &applespi->rd_m, applespi_async_read_complete);
+
+	sts = applespi_async(applespi, &applespi->rd_m, applespi_async_read_complete);
+	if (sts != 0)
+		pr_warn("Error queueing async read to device: %d\n", sts);
+	else
+		applespi->read_active = true;
+
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 
 	return ACPI_INTERRUPT_HANDLED;
@@ -1236,10 +1271,30 @@ static int applespi_probe(struct spi_device *spi)
 static int applespi_remove(struct spi_device *spi)
 {
 	struct applespi_data *applespi = spi_get_drvdata(spi);
+	unsigned long flags;
 
+	/* wait for all outstanding writes to finish */
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	applespi->drain = true;
+	wait_event_lock_irq(applespi->drain_complete, !applespi->write_active,
+			    applespi->cmd_msg_lock);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
+	/* shut things down */
 	acpi_disable_gpe(NULL, applespi->gpe);
 	acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
 
+	/* wait for all outstanding reads to finish */
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	wait_event_lock_irq(applespi->drain_complete, !applespi->read_active,
+			    applespi->cmd_msg_lock);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
+	/* done */
 	pr_info("spi-device remove done: %s\n", dev_name(&spi->dev));
 	return 0;
 }
