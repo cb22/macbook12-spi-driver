@@ -45,7 +45,6 @@
 
 #define PACKET_KEYBOARD         288
 #define PACKET_TOUCHPAD         544
-#define PACKET_NOTHING          53312
 
 #define MAX_ROLLOVER 		6
 
@@ -57,6 +56,23 @@
 #define KBD_BL_LEVEL_SCALE	1000000
 #define KBD_BL_LEVEL_ADJ	\
 	((MAX_KBD_BL_LEVEL - MIN_KBD_BL_LEVEL) * KBD_BL_LEVEL_SCALE / 255)
+
+#define DBG_CMD_TP_INI		(1 <<  0)
+#define DBG_CMD_BL		(1 <<  1)
+#define DBG_CMD_CL		(1 <<  2)
+#define DBG_RD_KEYB		(1 <<  8)
+#define DBG_RD_TPAD		(1 <<  9)
+#define DBG_RD_UNKN		(1 << 10)
+#define DBG_RD_IRQ 		(1 << 11)
+#define DBG_TP_DIM		(1 << 16)
+
+#define	debug_print(mask, fmt, ...) \
+	if (debug & mask) \
+		printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
+#define	debug_print_buffer(mask, fmt, ...) \
+	if (debug & mask) \
+		print_hex_dump(KERN_DEBUG, pr_fmt(fmt), DUMP_PREFIX_NONE, \
+		32, 1, ##__VA_ARGS__, false)
 
 #define APPLE_FLAG_FKEY		0x01
 
@@ -71,6 +87,10 @@ static unsigned int iso_layout = 0;
 module_param(iso_layout, uint, 0644);
 MODULE_PARM_DESC(iso_layout, "Enable/Disable hardcoded ISO-layout of the keyboard. "
 		"([0] = disabled, 1 = enabled)");
+
+static unsigned int debug = 0;
+module_param(debug, uint, 0644);
+MODULE_PARM_DESC(debug, "Enable/Disable debug logging. This is a bitmask.");
 
 
 struct keyboard_protocol {
@@ -201,6 +221,7 @@ struct applespi_data {
 	unsigned			cmd_msg_cntr;
 	spinlock_t			cmd_msg_lock;
 	bool				cmd_msg_queued;
+	unsigned			cmd_log_mask;
 
 	struct led_classdev		backlight_info;
 };
@@ -342,6 +363,31 @@ u8 *applespi_caps_lock_led_cmd = "\x40\x01\x00\x00\x00\x00\x0C\x00\x51\x01\x00\x
 
 u8 *applespi_kbd_led_cmd = "\x40\x01\x00\x00\x00\x00\x10\x00\x51\xB0\x00\x00\x06\x00\x06\x00\xB0\x01\x3E\x00\xF4\x01\x96\xC5\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x3E\x59";
 
+static const char *
+applespi_debug_facility(unsigned log_mask)
+{
+	switch (log_mask) {
+	case DBG_CMD_TP_INI:
+		return "Touchpad Initialization";
+	case DBG_CMD_BL:
+		return "Backlight Command";
+	case DBG_CMD_CL:
+		return "Caps-Lock Command";
+	case DBG_RD_KEYB:
+		return "Keyboard Event";
+	case DBG_RD_TPAD:
+		return "Touchpad Event";
+	case DBG_RD_UNKN:
+		return "Unknown Event";
+	case DBG_RD_IRQ:
+		return "Interrupt Request";
+	case DBG_TP_DIM:
+		return "Touchpad Dimensions";
+	default:
+		return "-Unknown-";
+	}
+}
+
 static void
 applespi_setup_read_txfr(struct applespi_data *applespi,
 			 struct spi_transfer *rd_t)
@@ -423,7 +469,8 @@ applespi_check_write_status(struct applespi_data *applespi, int sts)
 }
 
 static inline ssize_t
-applespi_sync_write_and_response(struct applespi_data *applespi)
+applespi_sync_write_and_response(struct applespi_data *applespi,
+				 unsigned log_mask)
 {
 	/*
 	The Windows driver always seems to do a 256 byte write, followed
@@ -446,16 +493,14 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 
 	ret = applespi_sync(applespi, &m);
 
-#ifdef DEBUG_ALL_WRITE
-	print_hex_dump(KERN_INFO, "applespi: write  ", DUMP_PREFIX_NONE,
-		       32, 1, applespi->tx_buffer, APPLESPI_PACKET_SIZE, false);
-	print_hex_dump(KERN_INFO, "applespi: status ", DUMP_PREFIX_NONE,
-		       32, 1, applespi->tx_status, APPLESPI_STATUS_SIZE, false);
-#endif
-#ifdef DEBUG_ALL_READ
-	print_hex_dump(KERN_INFO, "applespi: read  ", DUMP_PREFIX_NONE,
-		       32, 1, applespi->rx_buffer, APPLESPI_PACKET_SIZE, false);
-#endif
+	debug_print(log_mask, "--- %s ---------------------------\n",
+		    applespi_debug_facility(log_mask));
+	debug_print_buffer(log_mask, "write  ", applespi->tx_buffer,
+			   APPLESPI_PACKET_SIZE);
+	debug_print_buffer(log_mask, "status ", applespi->tx_status,
+			   APPLESPI_STATUS_SIZE);
+	debug_print_buffer(log_mask, "read   ", applespi->rx_buffer,
+			   APPLESPI_PACKET_SIZE);
 
 	applespi_check_write_status(applespi, ret);
 
@@ -463,7 +508,7 @@ applespi_sync_write_and_response(struct applespi_data *applespi)
 }
 
 static inline ssize_t
-applespi_sync_read(struct applespi_data *applespi)
+applespi_sync_read(struct applespi_data *applespi, unsigned log_mask)
 {
 	struct spi_transfer t;
 	struct spi_message m;
@@ -474,10 +519,10 @@ applespi_sync_read(struct applespi_data *applespi)
 
 	ret = applespi_sync(applespi, &m);
 
-#ifdef DEBUG_ALL_READ
-	print_hex_dump(KERN_INFO, "applespi: read  ", DUMP_PREFIX_NONE,
-		       32, 1, applespi->rx_buffer, APPLESPI_PACKET_SIZE, false);
-#endif
+	debug_print(log_mask, "--- %s ---------------------------\n",
+		    applespi_debug_facility(log_mask));
+	debug_print_buffer(log_mask, "read   ", applespi->rx_buffer,
+			   APPLESPI_PACKET_SIZE);
 
 	if (ret < 0)
 		pr_warn("Error reading from device: %ld\n", ret);
@@ -613,11 +658,11 @@ static void applespi_init(struct applespi_data *applespi)
 	ssize_t items = ARRAY_SIZE(applespi_init_commands);
 
 	// Do a read to flush the trackpad
-	applespi_sync_read(applespi);
+	applespi_sync_read(applespi, DBG_CMD_TP_INI);
 
 	for (i=0; i < items; i++) {
 		memcpy(applespi->tx_buffer, applespi_init_commands[i], 256);
-		applespi_sync_write_and_response(applespi);
+		applespi_sync_write_and_response(applespi, DBG_CMD_TP_INI);
 	}
 
 	pr_info("modeswitch done.\n");
@@ -629,6 +674,13 @@ static void applespi_async_write_complete(void *context)
 {
 	struct applespi_data *applespi = context;
 	unsigned long flags;
+
+	debug_print(applespi->cmd_log_mask, "--- %s ---------------------------\n",
+		    applespi_debug_facility(applespi->cmd_log_mask));
+	debug_print_buffer(applespi->cmd_log_mask, "write  ", applespi->tx_buffer,
+			   APPLESPI_PACKET_SIZE);
+	debug_print_buffer(applespi->cmd_log_mask, "status ", applespi->tx_status,
+			   APPLESPI_STATUS_SIZE);
 
 	applespi_check_write_status(applespi, applespi->wr_m.status);
 
@@ -653,6 +705,7 @@ applespi_send_cmd_msg(struct applespi_data *applespi)
 	/* do we need caps-lock command? */
 	if (applespi->want_cl_led_on != applespi->have_cl_led_on) {
 		applespi->have_cl_led_on = applespi->want_cl_led_on;
+		applespi->cmd_log_mask = DBG_CMD_CL;
 
 		/* build led command buffer */
 		memcpy(applespi->tx_buffer, applespi_caps_lock_led_cmd,
@@ -668,6 +721,7 @@ applespi_send_cmd_msg(struct applespi_data *applespi)
 	/* do we need backlight command? */
 	} else if (applespi->want_bl_level != applespi->have_bl_level) {
 		applespi->have_bl_level = applespi->want_bl_level;
+		applespi->cmd_log_mask = DBG_CMD_BL;
 
 		/* build command buffer */
 		memcpy(applespi->tx_buffer, applespi_kbd_led_cmd,
@@ -796,35 +850,10 @@ static void report_finger_data(struct input_dev *input, int slot,
 
 static int report_tp_state(struct applespi_data *applespi, struct touchpad_protocol* t)
 {
-#if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
 	static int min_x = 0, max_x = 0, min_y = 0, max_y = 0;
 	static bool dim_updated = false;
 	static ktime_t last_print = 0;
 
-#define UPDATE_DIMENSIONS(val, op, last) \
-		if (raw2int(val) op last) { \
-			last = raw2int(val); \
-			dim_updated = true; \
-		}
-
-#define	DEBUG_FMT	"New touchpad dimensions: %d %d %d %d\n"
-#define	DEBUG_ARGS	min_x, max_x, min_y, max_y
-
-#if defined(DEBUG)
-
-#define APPLESPI_DEBUG_RANGES()		true
-#define APPLESPI_PRINT_RANGES() \
-		pr_debug(DEBUG_FMT, DEBUG_ARGS)
-
-#elif defined(CONFIG_DYNAMIC_DEBUG)
-
-        DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, DEBUG_FMT);
-#define APPLESPI_DEBUG_RANGES()		DYNAMIC_DEBUG_BRANCH(descriptor)
-#define APPLESPI_PRINT_RANGES() \
-		__dynamic_pr_debug(&descriptor, pr_fmt(DEBUG_FMT), DEBUG_ARGS)
-
-#endif
-#endif
 	const struct tp_finger *f;
 	struct input_dev *input = applespi->touchpad_input_dev;
 	const struct applespi_tp_info *tp_info = applespi->tp_info;
@@ -840,26 +869,30 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 		applespi->pos[n].y = tp_info->y_min + tp_info->y_max - raw2int(f->abs_y);
 		n++;
 
-#if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
-		if (APPLESPI_DEBUG_RANGES()) {
+		if (debug & DBG_TP_DIM) {
+			#define UPDATE_DIMENSIONS(val, op, last) \
+				if (raw2int(val) op last) { \
+					last = raw2int(val); \
+					dim_updated = true; \
+				}
+
 			UPDATE_DIMENSIONS(f->abs_x, <, min_x);
 			UPDATE_DIMENSIONS(f->abs_x, >, max_x);
 			UPDATE_DIMENSIONS(f->abs_y, <, min_y);
 			UPDATE_DIMENSIONS(f->abs_y, >, max_y);
 		}
-#endif
 	}
 
-#if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
-	if (APPLESPI_DEBUG_RANGES()) {
+	if (debug & DBG_TP_DIM) {
 		if (dim_updated &&
 		    ktime_ms_delta(ktime_get(), last_print) > 1000) {
-			APPLESPI_PRINT_RANGES();
+			printk(KERN_DEBUG
+			       pr_fmt("New touchpad dimensions: %d %d %d %d\n"),
+			       min_x, max_x, min_y, max_y);
 			dim_updated = false;
 			last_print = ktime_get();
 		}
 	}
-#endif
 
 	input_mt_assign_slots(input, applespi->slots, applespi->pos, n, 0);
 
@@ -927,9 +960,12 @@ applespi_got_data(struct applespi_data *applespi)
 	bool still_pressed;
 
 	memcpy(&keyboard_protocol, applespi->rx_buffer, APPLESPI_PACKET_SIZE);
-	if (keyboard_protocol.packet_type == PACKET_NOTHING) {
-		return;
-	} else if (keyboard_protocol.packet_type == PACKET_KEYBOARD) {
+	if (keyboard_protocol.packet_type == PACKET_KEYBOARD) {
+		debug_print(DBG_RD_KEYB, "--- %s ---------------------------\n",
+			    applespi_debug_facility(DBG_RD_KEYB));
+		debug_print_buffer(DBG_RD_KEYB, "read   ", applespi->rx_buffer,
+				   APPLESPI_PACKET_SIZE);
+
 		for (i=0; i<6; i++) {
 			still_pressed = false;
 			for (j=0; j<6; j++) {
@@ -974,14 +1010,18 @@ applespi_got_data(struct applespi_data *applespi)
 		input_sync(applespi->keyboard_input_dev);
 		memcpy(&applespi->last_keys_pressed, keyboard_protocol.keys_pressed, sizeof(applespi->last_keys_pressed));
 	} else if (keyboard_protocol.packet_type == PACKET_TOUCHPAD) {
+		debug_print(DBG_RD_TPAD, "--- %s ---------------------------\n",
+			    applespi_debug_facility(DBG_RD_TPAD));
+		debug_print_buffer(DBG_RD_TPAD, "read   ", applespi->rx_buffer,
+				   APPLESPI_PACKET_SIZE);
+
 		report_tp_state(applespi, (struct touchpad_protocol*)&keyboard_protocol);
+	} else {
+		debug_print(DBG_RD_UNKN, "--- %s ---------------------------\n",
+			    applespi_debug_facility(DBG_RD_UNKN));
+		debug_print_buffer(DBG_RD_UNKN, "read   ", applespi->rx_buffer,
+				   APPLESPI_PACKET_SIZE);
 	}
-#ifdef DEBUG_UNKNOWN_PACKET
-	else {
-		pr_info("--- %d\n", keyboard_protocol.packet_type);
-		print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, &keyboard_protocol, APPLESPI_PACKET_SIZE, false);
-	}
-#endif
 }
 
 static void applespi_async_read_complete(void *context)
@@ -993,15 +1033,15 @@ static void applespi_async_read_complete(void *context)
 	else
 		applespi_got_data(applespi);
 
-#ifdef DEBUG_ALL_READ
-	print_hex_dump(KERN_INFO, "applespi: ", DUMP_PREFIX_NONE, 32, 1, applespi->rx_buffer, 256, false);
-#endif
 	acpi_finish_gpe(NULL, applespi->gpe);
 }
 
 static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 {
 	struct applespi_data *applespi = context;
+
+	debug_print(DBG_RD_IRQ, "--- %s ---------------------------\n",
+		    applespi_debug_facility(DBG_RD_IRQ));
 
 	memset(&applespi->dl_t, 0, sizeof(applespi->dl_t));
 	applespi->dl_t.delay_usecs = applespi->spi_settings.reset_a2r_usec;

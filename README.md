@@ -47,6 +47,15 @@ Touchpad:
 ---------
 The touchpad protocol is the same as the bcm5974 driver. Perhaps there is a nice way of utilizing it? For now, bits of code have just been copy and pasted.
 
+Debugging:
+----------
+The `debug` module parameter can be used to turn debugging output on (and off) dynamically, and can be set in all the usual ways (e.g. via kernel command-line (`applespi.debug=0x1`), via sysfs (`echo 0x10000 | sudo tee /sys/module/applespi/parameters/debug`), etc.).
+
+Some useful values are (since the value is a bitmask, these can be combined):
+* 0x10000 - determine touchpad values range
+* 0x1     - turn on logging of touchpad initialization packets
+* 0x6     - turn on logging of backlight and caps-lock-led packets
+
 Some useful threads:
 --------------------
 * https://bugzilla.kernel.org/show_bug.cgi?id=108331
