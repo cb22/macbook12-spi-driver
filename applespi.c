@@ -30,6 +30,7 @@
 #include <linux/crc16.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
+#include <linux/wait.h>
 #include <linux/notifier.h>
 #include <linux/leds.h>
 #if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
@@ -43,8 +44,10 @@
 #define APPLESPI_PACKET_SIZE    256
 #define APPLESPI_STATUS_SIZE    4
 
-#define PACKET_KEYBOARD         288
-#define PACKET_TOUCHPAD         544
+#define PACKET_TYPE_READ        0x20
+#define PACKET_TYPE_WRITE       0x40
+#define PACKET_DEV_KEYB         0x01
+#define PACKET_DEV_TPAD         0x02
 
 #define MAX_ROLLOVER 		6
 
@@ -77,6 +80,7 @@
 #define APPLE_FLAG_FKEY		0x01
 
 #define SPI_DEV_CHIP_SEL	0	// from DSDT UBUF
+#define SPI_RW_CHG_DLY		100	/* from experimentation, in us */
 
 static unsigned int fnmode = 1;
 module_param(fnmode, uint, 0644);
@@ -94,7 +98,8 @@ MODULE_PARM_DESC(debug, "Enable/Disable debug logging. This is a bitmask.");
 
 
 struct keyboard_protocol {
-	u16		packet_type;
+	u8		packet_type;
+	u8		device;
 	u8		unknown1[9];
 	u8		counter;
 	u8		unknown2[5];
@@ -125,7 +130,8 @@ struct tp_finger {
 } __attribute__((packed,aligned(2)));
 
 struct touchpad_protocol {
-	u16			packet_type;
+	u8			packet_type;
+	u8			device;
 	u8			unknown1[4];
 	u8			number_of_fingers;
 	u8			unknown2[4];
@@ -146,7 +152,7 @@ struct appleacpi_spi_registration_info {
 	struct acpi_device 	*adev;
 	struct spi_device 	*spi;
 	struct spi_master	*spi_master;
-	struct work_struct	work;
+	struct delayed_work	work;
 	struct notifier_block	slave_notifier;
 };
 
@@ -156,7 +162,7 @@ struct spi_settings {
 	u64	spi_bit_order;   	/* 1 = MSB_FIRST, 0 = LSB_FIRST */
 	u64	spi_spo;        	/* clock polarity: 0 = low, 1 = high */
 	u64	spi_sph;		/* clock phase: 0 = first, 1 = second */
-	u64	spi_cs_delay;    	/* in 10us (?) */
+	u64	spi_cs_delay;    	/* cs-to-clk delay in us */
 	u64	reset_a2r_usec;  	/* active-to-receive delay? */
 	u64	reset_rec_usec;  	/* ? (cur val: 10) */
 };
@@ -210,10 +216,12 @@ struct applespi_data {
 	struct spi_transfer		rd_t;
 	struct spi_message		rd_m;
 
+	struct spi_transfer		wd_t;
 	struct spi_transfer		wr_t;
 	struct spi_transfer		st_t;
 	struct spi_message		wr_m;
 
+	int				init_cmd_idx;
 	bool				want_cl_led_on;
 	bool				have_cl_led_on;
 	unsigned			want_bl_level;
@@ -224,6 +232,11 @@ struct applespi_data {
 	unsigned			cmd_log_mask;
 
 	struct led_classdev		backlight_info;
+
+	bool				drain;
+	wait_queue_head_t		drain_complete;
+	bool				read_active;
+	bool				write_active;
 };
 
 static const unsigned char applespi_scancodes[] = {
@@ -390,29 +403,34 @@ applespi_debug_facility(unsigned log_mask)
 
 static void
 applespi_setup_read_txfr(struct applespi_data *applespi,
-			 struct spi_transfer *rd_t)
+			 struct spi_transfer *dl_t, struct spi_transfer *rd_t)
 {
+	memset(dl_t, 0, sizeof *dl_t);
 	memset(rd_t, 0, sizeof *rd_t);
+
+	dl_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
 
 	rd_t->rx_buf = applespi->rx_buffer;
 	rd_t->len = APPLESPI_PACKET_SIZE;
-	rd_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
 }
 
 static void
 applespi_setup_write_txfr(struct applespi_data *applespi,
-			  struct spi_transfer *wr_t, struct spi_transfer *st_t)
+			  struct spi_transfer *dl_t, struct spi_transfer *wr_t,
+			  struct spi_transfer *st_t)
 {
+	memset(dl_t, 0, sizeof *dl_t);
 	memset(wr_t, 0, sizeof *wr_t);
 	memset(st_t, 0, sizeof *st_t);
 
+	dl_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
+
 	wr_t->tx_buf = applespi->tx_buffer;
 	wr_t->len = APPLESPI_PACKET_SIZE;
-	wr_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
+	wr_t->delay_usecs = SPI_RW_CHG_DLY;
 
 	st_t->rx_buf = applespi->tx_status;
 	st_t->len = APPLESPI_STATUS_SIZE;
-	st_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
 }
 
 static void
@@ -430,22 +448,6 @@ applespi_setup_spi_message(struct spi_message *message, int num_txfrs, ...)
 }
 
 static int
-applespi_sync(struct applespi_data *applespi, struct spi_message *message)
-{
-	struct spi_device *spi;
-	int status;
-
-	spi = applespi->spi;
-
-	status = spi_sync(spi, message);
-
-	if (status == 0)
-		status = message->actual_length;
-
-	return status;
-}
-
-static int
 applespi_async(struct applespi_data *applespi, struct spi_message *message,
 	       void (*complete)(void *))
 {
@@ -455,77 +457,21 @@ applespi_async(struct applespi_data *applespi, struct spi_message *message,
 	return spi_async(applespi->spi, message);
 }
 
-static inline void
+static inline bool
 applespi_check_write_status(struct applespi_data *applespi, int sts)
 {
-	u8 sts_ok[] = { 0xac, 0x27, 0x68, 0xd5 };
+	static u8 sts_ok[] = { 0xac, 0x27, 0x68, 0xd5 };
+	bool ret = true;
 
-	if (sts < 0)
+	if (sts < 0) {
+		ret = false;
 		pr_warn("Error writing to device: %d\n", sts);
-	else if (memcmp(applespi->tx_status, sts_ok, APPLESPI_STATUS_SIZE) != 0)
+	} else if (memcmp(applespi->tx_status, sts_ok, APPLESPI_STATUS_SIZE) != 0) {
+		ret = false;
 		pr_warn("Error writing to device: %x %x %x %x\n",
 			applespi->tx_status[0], applespi->tx_status[1],
 			applespi->tx_status[2], applespi->tx_status[3]);
-}
-
-static inline ssize_t
-applespi_sync_write_and_response(struct applespi_data *applespi,
-				 unsigned log_mask)
-{
-	/*
-	The Windows driver always seems to do a 256 byte write, followed
-	by a 4 byte read with CS still the same, followed by a toggling of
-	CS and a 256 byte read for the real response.
-	*/
-	struct spi_transfer t1;
-	struct spi_transfer t2;
-	struct spi_transfer t3;
-	struct spi_transfer t4;
-	struct spi_message m;
-	ssize_t ret;
-
-	applespi_setup_write_txfr(applespi, &t1, &t2);
-	t2.cs_change = 1;
-	memset(&t3, 0, sizeof(t3));
-	t3.delay_usecs = applespi->spi_settings.reset_rec_usec;
-	applespi_setup_read_txfr(applespi, &t4);
-	applespi_setup_spi_message(&m, 4, &t1, &t2, &t3, &t4);
-
-	ret = applespi_sync(applespi, &m);
-
-	debug_print(log_mask, "--- %s ---------------------------\n",
-		    applespi_debug_facility(log_mask));
-	debug_print_buffer(log_mask, "write  ", applespi->tx_buffer,
-			   APPLESPI_PACKET_SIZE);
-	debug_print_buffer(log_mask, "status ", applespi->tx_status,
-			   APPLESPI_STATUS_SIZE);
-	debug_print_buffer(log_mask, "read   ", applespi->rx_buffer,
-			   APPLESPI_PACKET_SIZE);
-
-	applespi_check_write_status(applespi, ret);
-
-	return ret;
-}
-
-static inline ssize_t
-applespi_sync_read(struct applespi_data *applespi, unsigned log_mask)
-{
-	struct spi_transfer t;
-	struct spi_message m;
-	ssize_t ret;
-
-	applespi_setup_read_txfr(applespi, &t);
-	applespi_setup_spi_message(&m, 1, &t);
-
-	ret = applespi_sync(applespi, &m);
-
-	debug_print(log_mask, "--- %s ---------------------------\n",
-		    applespi_debug_facility(log_mask));
-	debug_print_buffer(log_mask, "read   ", applespi->rx_buffer,
-			   APPLESPI_PACKET_SIZE);
-
-	if (ret < 0)
-		pr_warn("Error reading from device: %ld\n", ret);
+	}
 
 	return ret;
 }
@@ -604,9 +550,6 @@ static int applespi_get_spi_settings(acpi_handle handle,
 	}
 	ACPI_FREE(spi_info);
 
-	/* acpi provided value is in 10us units */
-	settings->spi_cs_delay *= 10;
-
 	return 0;
 }
 
@@ -620,6 +563,7 @@ static int applespi_setup_spi(struct applespi_data *applespi)
 		return sts;
 
 	spin_lock_init(&applespi->cmd_msg_lock);
+	init_waitqueue_head(&applespi->drain_complete);
 
 	return 0;
 }
@@ -652,37 +596,11 @@ static int applespi_enable_spi(struct applespi_data *applespi)
 	return 0;
 }
 
-static void applespi_init(struct applespi_data *applespi)
-{
-	int i;
-	ssize_t items = ARRAY_SIZE(applespi_init_commands);
-
-	// Do a read to flush the trackpad
-	applespi_sync_read(applespi, DBG_CMD_TP_INI);
-
-	for (i=0; i < items; i++) {
-		memcpy(applespi->tx_buffer, applespi_init_commands[i], 256);
-		applespi_sync_write_and_response(applespi, DBG_CMD_TP_INI);
-	}
-
-	pr_info("modeswitch done.\n");
-}
-
 static int applespi_send_cmd_msg(struct applespi_data *applespi);
 
-static void applespi_async_write_complete(void *context)
+static void applespi_cmd_msg_complete(struct applespi_data *applespi)
 {
-	struct applespi_data *applespi = context;
 	unsigned long flags;
-
-	debug_print(applespi->cmd_log_mask, "--- %s ---------------------------\n",
-		    applespi_debug_facility(applespi->cmd_log_mask));
-	debug_print_buffer(applespi->cmd_log_mask, "write  ", applespi->tx_buffer,
-			   APPLESPI_PACKET_SIZE);
-	debug_print_buffer(applespi->cmd_log_mask, "status ", applespi->tx_status,
-			   APPLESPI_STATUS_SIZE);
-
-	applespi_check_write_status(applespi, applespi->wr_m.status);
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
@@ -692,18 +610,49 @@ static void applespi_async_write_complete(void *context)
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 }
 
+static void applespi_async_write_complete(void *context)
+{
+	struct applespi_data *applespi = context;
+
+	debug_print(applespi->cmd_log_mask, "--- %s ---------------------------\n",
+		    applespi_debug_facility(applespi->cmd_log_mask));
+	debug_print_buffer(applespi->cmd_log_mask, "write  ", applespi->tx_buffer,
+			   APPLESPI_PACKET_SIZE);
+	debug_print_buffer(applespi->cmd_log_mask, "status ", applespi->tx_status,
+			   APPLESPI_STATUS_SIZE);
+
+	if (!applespi_check_write_status(applespi, applespi->wr_m.status))
+		applespi_cmd_msg_complete(applespi);
+}
+
 static int
 applespi_send_cmd_msg(struct applespi_data *applespi)
 {
 	u16 crc;
 	int sts;
 
+	/* check if draining */
+	if (applespi->drain)
+		return 0;
+
 	/* check whether send is in progress */
 	if (applespi->cmd_msg_queued)
 		return 0;
 
+	/* are we processing init commands? */
+	if (applespi->init_cmd_idx >= 0) {
+		memcpy(applespi->tx_buffer,
+		       applespi_init_commands[applespi->init_cmd_idx],
+		       APPLESPI_PACKET_SIZE);
+
+		applespi->init_cmd_idx++;
+		if (applespi->init_cmd_idx >= ARRAY_SIZE(applespi_init_commands))
+			applespi->init_cmd_idx = -1;
+
+		applespi->cmd_log_mask = DBG_CMD_TP_INI;
+
 	/* do we need caps-lock command? */
-	if (applespi->want_cl_led_on != applespi->have_cl_led_on) {
+	} else if (applespi->want_cl_led_on != applespi->have_cl_led_on) {
 		applespi->have_cl_led_on = applespi->want_cl_led_on;
 		applespi->cmd_log_mask = DBG_CMD_CL;
 
@@ -750,19 +699,35 @@ applespi_send_cmd_msg(struct applespi_data *applespi)
 	}
 
 	/* send command */
-	applespi_setup_write_txfr(applespi, &applespi->wr_t, &applespi->st_t);
-	applespi_setup_spi_message(&applespi->wr_m, 2, &applespi->wr_t,
-				   &applespi->st_t);
+	applespi_setup_write_txfr(applespi, &applespi->wd_t, &applespi->wr_t,
+				  &applespi->st_t);
+	applespi_setup_spi_message(&applespi->wr_m, 3, &applespi->wd_t,
+				   &applespi->wr_t, &applespi->st_t);
 
 	sts = applespi_async(applespi, &applespi->wr_m,
 			     applespi_async_write_complete);
 
-	if (sts != 0)
+	if (sts != 0) {
 		pr_warn("Error queueing async write to device: %d\n", sts);
-	else
+	} else {
 		applespi->cmd_msg_queued = true;
+		applespi->write_active = true;
+	}
+
 
 	return sts;
+}
+
+static void applespi_init(struct applespi_data *applespi)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	applespi->init_cmd_idx = 0;
+	applespi_send_cmd_msg(applespi);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 }
 
 static int
@@ -952,76 +917,129 @@ applespi_code_to_key(u8 code, int fn_pressed)
 }
 
 static void
-applespi_got_data(struct applespi_data *applespi)
+applespi_handle_keyboard_event(struct applespi_data *applespi,
+			       struct keyboard_protocol *keyboard_protocol)
 {
-	struct keyboard_protocol keyboard_protocol;
 	int i, j;
 	unsigned int key;
 	bool still_pressed;
 
-	memcpy(&keyboard_protocol, applespi->rx_buffer, APPLESPI_PACKET_SIZE);
-	if (keyboard_protocol.packet_type == PACKET_KEYBOARD) {
+	for (i=0; i<6; i++) {
+		still_pressed = false;
+		for (j=0; j<6; j++) {
+			if (applespi->last_keys_pressed[i] == keyboard_protocol->keys_pressed[j]) {
+				still_pressed = true;
+				break;
+			}
+		}
+
+		if (! still_pressed) {
+			key = applespi_code_to_key(applespi->last_keys_pressed[i], applespi->last_keys_fn_pressed[i]);
+			input_report_key(applespi->keyboard_input_dev, key, 0);
+			applespi->last_keys_fn_pressed[i] = 0;
+		}
+	}
+
+	for (i=0; i<6; i++) {
+		if (keyboard_protocol->keys_pressed[i] < ARRAY_SIZE(applespi_scancodes) && keyboard_protocol->keys_pressed[i] > 0) {
+			key = applespi_code_to_key(keyboard_protocol->keys_pressed[i], keyboard_protocol->fn_pressed);
+			input_report_key(applespi->keyboard_input_dev, key, 1);
+			applespi->last_keys_fn_pressed[i] = keyboard_protocol->fn_pressed;
+		}
+	}
+
+	// Check control keys
+	for (i=0; i<8; i++) {
+		if (test_bit(i, (long unsigned int *)&keyboard_protocol->modifiers)) {
+			input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 1);
+		} else {
+			input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 0);
+		}
+	}
+
+	// Check function key
+	if (keyboard_protocol->fn_pressed && !applespi->last_fn_pressed) {
+		input_report_key(applespi->keyboard_input_dev, KEY_FN, 1);
+	} else if (!keyboard_protocol->fn_pressed && applespi->last_fn_pressed) {
+		input_report_key(applespi->keyboard_input_dev, KEY_FN, 0);
+	}
+	applespi->last_fn_pressed = keyboard_protocol->fn_pressed;
+
+	input_sync(applespi->keyboard_input_dev);
+	memcpy(&applespi->last_keys_pressed, keyboard_protocol->keys_pressed, sizeof(applespi->last_keys_pressed));
+}
+
+static void
+applespi_handle_cmd_response(struct applespi_data *applespi,
+			     struct keyboard_protocol *keyboard_protocol)
+{
+	if (keyboard_protocol->device == PACKET_DEV_TPAD &&
+	    memcmp(((u8 *) keyboard_protocol) + 8,
+		   applespi_init_commands[0] + 8, 4) == 0)
+		pr_info("modeswitch done.\n");
+}
+
+static void
+applespi_got_data(struct applespi_data *applespi)
+{
+	struct keyboard_protocol *keyboard_protocol;
+	unsigned long flags;
+
+	keyboard_protocol = (struct keyboard_protocol*) applespi->rx_buffer;
+	if (keyboard_protocol->packet_type == PACKET_TYPE_READ &&
+	    keyboard_protocol->device == PACKET_DEV_KEYB) {
 		debug_print(DBG_RD_KEYB, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_KEYB));
 		debug_print_buffer(DBG_RD_KEYB, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 
-		for (i=0; i<6; i++) {
-			still_pressed = false;
-			for (j=0; j<6; j++) {
-				if (applespi->last_keys_pressed[i] == keyboard_protocol.keys_pressed[j]) {
-					still_pressed = true;
-					break;
-				}
-			}
+		applespi_handle_keyboard_event(applespi, keyboard_protocol);
 
-			if (! still_pressed) {
-				key = applespi_code_to_key(applespi->last_keys_pressed[i], applespi->last_keys_fn_pressed[i]);
-				input_report_key(applespi->keyboard_input_dev, key, 0);
-				applespi->last_keys_fn_pressed[i] = 0;
-			}
-		}
-
-		for (i=0; i<6; i++) {
-			if (keyboard_protocol.keys_pressed[i] < ARRAY_SIZE(applespi_scancodes) && keyboard_protocol.keys_pressed[i] > 0) {
-				key = applespi_code_to_key(keyboard_protocol.keys_pressed[i], keyboard_protocol.fn_pressed);
-				input_report_key(applespi->keyboard_input_dev, key, 1);
-				applespi->last_keys_fn_pressed[i] = keyboard_protocol.fn_pressed;
-			}
-		}
-
-		// Check control keys
-		for (i=0; i<8; i++) {
-			if (test_bit(i, (long unsigned int *)&keyboard_protocol.modifiers)) {
-				input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 1);
-			} else {
-				input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 0);
-			}
-		}
-
-		// Check function key
-		if (keyboard_protocol.fn_pressed && !applespi->last_fn_pressed) {
-			input_report_key(applespi->keyboard_input_dev, KEY_FN, 1);
-		} else if (!keyboard_protocol.fn_pressed && applespi->last_fn_pressed) {
-			input_report_key(applespi->keyboard_input_dev, KEY_FN, 0);
-		}
-		applespi->last_fn_pressed = keyboard_protocol.fn_pressed;
-
-		input_sync(applespi->keyboard_input_dev);
-		memcpy(&applespi->last_keys_pressed, keyboard_protocol.keys_pressed, sizeof(applespi->last_keys_pressed));
-	} else if (keyboard_protocol.packet_type == PACKET_TOUCHPAD) {
+	} else if (keyboard_protocol->packet_type == PACKET_TYPE_READ &&
+		   keyboard_protocol->device == PACKET_DEV_TPAD) {
 		debug_print(DBG_RD_TPAD, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_TPAD));
 		debug_print_buffer(DBG_RD_TPAD, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 
-		report_tp_state(applespi, (struct touchpad_protocol*)&keyboard_protocol);
+		report_tp_state(applespi, (struct touchpad_protocol*) keyboard_protocol);
+
+	} else if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE) {
+		debug_print(applespi->cmd_log_mask,
+			    "--- %s ---------------------------\n",
+			    applespi_debug_facility(applespi->cmd_log_mask));
+		debug_print_buffer(applespi->cmd_log_mask, "read   ",
+				   applespi->rx_buffer, APPLESPI_PACKET_SIZE);
+
+		applespi_handle_cmd_response(applespi, keyboard_protocol);
 	} else {
 		debug_print(DBG_RD_UNKN, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_UNKN));
 		debug_print_buffer(DBG_RD_UNKN, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 	}
+
+	/* Note: this relies on the fact that we are blocking the processing of
+	 * spi messages at this point, i.e. that no further transfers or cs
+	 * changes are processed while we delay here.
+	 */
+	udelay(SPI_RW_CHG_DLY);
+
+	/* handle draining */
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	applespi->read_active = false;
+	if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE)
+		applespi->write_active = false;
+
+	if (applespi->drain && !applespi->write_active)
+		wake_up_all(&applespi->drain_complete);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
+	/* notify write complete */
+	if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE)
+		applespi_cmd_msg_complete(applespi);
 }
 
 static void applespi_async_read_complete(void *context)
@@ -1039,16 +1057,25 @@ static void applespi_async_read_complete(void *context)
 static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 {
 	struct applespi_data *applespi = context;
+	int sts;
+	unsigned long flags;
 
 	debug_print(DBG_RD_IRQ, "--- %s ---------------------------\n",
 		    applespi_debug_facility(DBG_RD_IRQ));
 
-	memset(&applespi->dl_t, 0, sizeof(applespi->dl_t));
-	applespi->dl_t.delay_usecs = applespi->spi_settings.reset_a2r_usec;
-	applespi_setup_read_txfr(applespi, &applespi->rd_t);
+	applespi_setup_read_txfr(applespi, &applespi->dl_t, &applespi->rd_t);
 	applespi_setup_spi_message(&applespi->rd_m, 2, &applespi->dl_t, &applespi->rd_t);
 
-	applespi_async(applespi, &applespi->rd_m, applespi_async_read_complete);
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	sts = applespi_async(applespi, &applespi->rd_m, applespi_async_read_complete);
+	if (sts != 0)
+		pr_warn("Error queueing async read to device: %d\n", sts);
+	else
+		applespi->read_active = true;
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
 	return ACPI_INTERRUPT_HANDLED;
 }
 
@@ -1058,12 +1085,24 @@ static int applespi_probe(struct spi_device *spi)
 	int result, i;
 	long long unsigned int gpe, usb_status;
 
+	/* Check if the USB interface is present and enabled already */
+	result = acpi_evaluate_integer(ACPI_HANDLE(&spi->dev), "UIST", NULL, &usb_status);
+	if (ACPI_SUCCESS(result) && usb_status) {
+		/* Let the USB driver take over instead */
+		pr_info("USB interface already enabled\n");
+		return -ENODEV;
+	}
+
 	/* Allocate driver data */
 	applespi = devm_kzalloc(&spi->dev, sizeof(*applespi), GFP_KERNEL);
 	if (!applespi)
 		return -ENOMEM;
 
 	applespi->spi = spi;
+	applespi->handle = ACPI_HANDLE(&spi->dev);
+
+	/* Store the driver data */
+	spi_set_drvdata(spi, applespi);
 
 	/* Create our buffers */
 	applespi->tx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE, GFP_KERNEL);
@@ -1073,8 +1112,21 @@ static int applespi_probe(struct spi_device *spi)
 	if (!applespi->tx_buffer || !applespi->tx_status || !applespi->rx_buffer)
 		return -ENOMEM;
 
-	/* Store the driver data */
-	spi_set_drvdata(spi, applespi);
+	/* Cache ACPI method handles */
+	if (ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIEN", &applespi->sien)) ||
+	    ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIST", &applespi->sist))) {
+		pr_err("Failed to get required ACPI method handle\n");
+		return -ENODEV;
+	}
+
+	/* Switch on the SPI interface */
+	result = applespi_setup_spi(applespi);
+	if (result)
+		return result;
+
+	result = applespi_enable_spi(applespi);
+	if (result)
+		return result;
 
 	/* Set up touchpad dimensions */
 	applespi->tp_info = dmi_first_match(applespi_touchpad_infos)->driver_data;
@@ -1167,35 +1219,6 @@ static int applespi_probe(struct spi_device *spi)
 		return -ENODEV;
 	}
 
-	applespi->handle = ACPI_HANDLE(&spi->dev);
-
-	/* Check if the USB interface is present and enabled already */
-	result = acpi_evaluate_integer(applespi->handle, "UIST", NULL, &usb_status);
-	if (ACPI_SUCCESS(result) && usb_status) {
-		/* Let the USB driver take over instead */
-		pr_info("USB interface already enabled\n");
-		return -ENODEV;
-	}
-
-	/* Cache ACPI method handles */
-	if (ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIEN", &applespi->sien)) ||
-	    ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIST", &applespi->sist))) {
-		pr_err("Failed to get required ACPI method handle\n");
-		return -ENODEV;
-	}
-
-	/* Switch on the SPI interface */
-	result = applespi_setup_spi(applespi);
-	if (result)
-		return result;
-
-	result = applespi_enable_spi(applespi);
-	if (result)
-		return result;
-
-	/* Switch the touchpad into multitouch mode */
-	applespi_init(applespi);
-
 	/*
 	 * The applespi device doesn't send interrupts normally (as is described
 	 * in its DSDT), but rather seems to use ACPI GPEs.
@@ -1223,6 +1246,9 @@ static int applespi_probe(struct spi_device *spi)
 		return -ENODEV;
 	}
 
+	/* Switch the touchpad into multitouch mode */
+	applespi_init(applespi);
+
 	/* set up keyboard-backlight */
 	applespi->backlight_info.name            = "spi::kbd_backlight";
 	applespi->backlight_info.default_trigger = "kbd-backlight";
@@ -1245,10 +1271,30 @@ static int applespi_probe(struct spi_device *spi)
 static int applespi_remove(struct spi_device *spi)
 {
 	struct applespi_data *applespi = spi_get_drvdata(spi);
+	unsigned long flags;
 
+	/* wait for all outstanding writes to finish */
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	applespi->drain = true;
+	wait_event_lock_irq(applespi->drain_complete, !applespi->write_active,
+			    applespi->cmd_msg_lock);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
+	/* shut things down */
 	acpi_disable_gpe(NULL, applespi->gpe);
 	acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
 
+	/* wait for all outstanding reads to finish */
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	wait_event_lock_irq(applespi->drain_complete, !applespi->read_active,
+			    applespi->cmd_msg_lock);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
+	/* done */
 	pr_info("spi-device remove done: %s\n", dev_name(&spi->dev));
 	return 0;
 }
@@ -1492,7 +1538,13 @@ release_master:
 static void appleacpi_dev_registration_worker(struct work_struct *work)
 {
 	struct appleacpi_spi_registration_info *info =
-		container_of(work, struct appleacpi_spi_registration_info, work);
+		container_of(work, struct appleacpi_spi_registration_info, work.work);
+
+	if (info->spi_master && !info->spi_master->running) {
+		pr_debug_ratelimited("spi-master device is not running yet\n");
+		schedule_delayed_work(&info->work, usecs_to_jiffies(100));
+		return;
+	}
 
 	appleacpi_register_spi_device(info->spi_master, info->adev);
 }
@@ -1526,7 +1578,7 @@ static int appleacpi_spi_master_added(struct device *dev,
 	 * so need to do the actual registration in a worker.
 	 */
 	info->spi_master = spi_master_get(spi_master);
-	schedule_work(&info->work);
+	schedule_delayed_work(&info->work, usecs_to_jiffies(100));
 
 	return 0;
 }
@@ -1613,7 +1665,7 @@ static int appleacpi_probe(struct acpi_device *adev)
 	}
 
 	reg_info->adev = adev;
-	INIT_WORK(&reg_info->work, appleacpi_dev_registration_worker);
+	INIT_DELAYED_WORK(&reg_info->work, appleacpi_dev_registration_worker);
 
 	adev->driver_data = reg_info;
 
@@ -1673,7 +1725,7 @@ static int appleacpi_remove(struct acpi_device *adev)
 		class_interface_unregister(&reg_info->cif);
 		bus_unregister_notifier(&spi_bus_type,
 					&reg_info->slave_notifier);
-		cancel_work_sync(&reg_info->work);
+		cancel_delayed_work_sync(&reg_info->work);
 		if (reg_info->spi)
 			spi_unregister_device(reg_info->spi);
 		kfree(reg_info);
