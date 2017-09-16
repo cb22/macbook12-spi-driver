@@ -111,6 +111,7 @@ struct appletb_data {
 	struct input_handle	tpd_handle;
 
 	bool			last_tb_keys_pressed[MAX_TB_KEYS];
+	bool			last_tb_keys_translated[MAX_TB_KEYS];
 	bool			last_fn_pressed;
 
 	ktime_t			last_event_time;
@@ -644,13 +645,19 @@ static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
 	/* translate special keys */
 	} else if (usage->type == EV_KEY &&
 		   (new_code = appletb_fn_to_special(usage->code)) &&
-		   appletb_get_cur_tb_mode(tb_data) == APPLETB_CMD_MODE_SPCL) {
+		   ((value > 0 &&
+		     appletb_get_cur_tb_mode(tb_data) == APPLETB_CMD_MODE_SPCL)
+		    ||
+		    (value == 0 && tb_data->last_tb_keys_translated[slot]))) {
+		tb_data->last_tb_keys_translated[slot] = true;
 		input_event(field->hidinput->input, usage->type, new_code,
 			    value);
 		rc = 1;
+	/* everything else handled normally */
+	} else {
+		tb_data->last_tb_keys_translated[slot] = false;
 	}
 
-	/* everything else handled normally */
 	spin_unlock_irqrestore(&tb_data->tb_mode_lock, flags);
 
 	return rc;
