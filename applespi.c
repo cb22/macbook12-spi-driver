@@ -28,15 +28,22 @@
 #include <linux/dmi.h>
 #include <linux/spinlock.h>
 #include <linux/crc16.h>
-#include <linux/version.h>
-#include <linux/workqueue.h>
 #include <linux/wait.h>
-#include <linux/notifier.h>
 #include <linux/leds.h>
 #include <linux/ktime.h>
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/input-polldev.h>
+
+#include <linux/version.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+#define PRE_SPI_PROPERTIES
+#endif
+
+#ifdef PRE_SPI_PROPERTIES
+#include <linux/workqueue.h>
+#include <linux/notifier.h>
+#endif
 
 #define APPLESPI_PACKET_SIZE    256
 #define APPLESPI_STATUS_SIZE    4
@@ -76,7 +83,6 @@
 
 #define APPLE_FLAG_FKEY		0x01
 
-#define SPI_DEV_CHIP_SEL	0	// from DSDT UBUF
 #define SPI_RW_CHG_DLY		100	/* from experimentation, in us */
 
 static unsigned int fnmode = 1;
@@ -144,40 +150,17 @@ struct touchpad_protocol {
 	u8			unknown5[208];
 };
 
-struct appleacpi_spi_registration_info {
-	struct class_interface	cif;
-	struct acpi_device 	*adev;
-	struct spi_device 	*spi;
-	struct spi_master	*spi_master;
-	struct delayed_work	work;
-	struct notifier_block	slave_notifier;
-};
-
 struct spi_settings {
+#ifdef PRE_SPI_PROPERTIES
 	u64	spi_sclk_period;	/* period in ns */
 	u64	spi_word_size;   	/* in number of bits */
 	u64	spi_bit_order;   	/* 1 = MSB_FIRST, 0 = LSB_FIRST */
 	u64	spi_spo;        	/* clock polarity: 0 = low, 1 = high */
 	u64	spi_sph;		/* clock phase: 0 = first, 1 = second */
+#endif
 	u64	spi_cs_delay;    	/* cs-to-clk delay in us */
 	u64	reset_a2r_usec;  	/* active-to-receive delay? */
 	u64	reset_rec_usec;  	/* ? (cur val: 10) */
-};
-
-struct applespi_acpi_map_entry {
-	char *name;
-	size_t field_offset;
-};
-
-static const struct applespi_acpi_map_entry applespi_spi_settings_map[] = {
-	{ "spiSclkPeriod", offsetof(struct spi_settings, spi_sclk_period) },
-	{ "spiWordSize",   offsetof(struct spi_settings, spi_word_size) },
-	{ "spiBitOrder",   offsetof(struct spi_settings, spi_bit_order) },
-	{ "spiSPO",        offsetof(struct spi_settings, spi_spo) },
-	{ "spiSPH",        offsetof(struct spi_settings, spi_sph) },
-	{ "spiCSDelay",    offsetof(struct spi_settings, spi_cs_delay) },
-	{ "resetA2RUsec",  offsetof(struct spi_settings, reset_a2r_usec) },
-	{ "resetRecUsec",  offsetof(struct spi_settings, reset_rec_usec) },
 };
 
 struct applespi_tp_info {
@@ -299,8 +282,6 @@ static const struct applespi_key_translation apple_iso_keyboard[] = {
 	{ KEY_102ND,	KEY_GRAVE },
 	{ },
 };
-
-static u8 *acpi_dsm_uuid = "a0b5b7c6-1318-441c-b0c9-fe695eaf949b";
 
 static struct applespi_tp_info applespi_macbookpro131_info = { -6243, 6749, -170, 7685 };
 static struct applespi_tp_info applespi_macbookpro133_info = { -7456, 7976, -163, 9283 };
@@ -473,6 +454,35 @@ applespi_check_write_status(struct applespi_data *applespi, int sts)
 	return ret;
 }
 
+#ifdef PRE_SPI_PROPERTIES
+
+struct appleacpi_spi_registration_info {
+	struct class_interface	cif;
+	struct acpi_device 	*adev;
+	struct spi_device 	*spi;
+	struct spi_master	*spi_master;
+	struct delayed_work	work;
+	struct notifier_block	slave_notifier;
+};
+
+struct applespi_acpi_map_entry {
+	char *name;
+	size_t field_offset;
+};
+
+static const struct applespi_acpi_map_entry applespi_spi_settings_map[] = {
+	{ "spiSclkPeriod", offsetof(struct spi_settings, spi_sclk_period) },
+	{ "spiWordSize",   offsetof(struct spi_settings, spi_word_size) },
+	{ "spiBitOrder",   offsetof(struct spi_settings, spi_bit_order) },
+	{ "spiSPO",        offsetof(struct spi_settings, spi_spo) },
+	{ "spiSPH",        offsetof(struct spi_settings, spi_sph) },
+	{ "spiCSDelay",    offsetof(struct spi_settings, spi_cs_delay) },
+	{ "resetA2RUsec",  offsetof(struct spi_settings, reset_a2r_usec) },
+	{ "resetRecUsec",  offsetof(struct spi_settings, reset_rec_usec) },
+};
+
+static u8 *acpi_dsm_uuid = "a0b5b7c6-1318-441c-b0c9-fe695eaf949b";
+
 static int applespi_find_settings_field(const char *name)
 {
 	int i;
@@ -550,12 +560,48 @@ static int applespi_get_spi_settings(acpi_handle handle,
 	return 0;
 }
 
+#else
+
+static int applespi_get_spi_settings(struct applespi_data *applespi)
+{
+	struct acpi_device *adev = ACPI_COMPANION(&applespi->spi->dev);
+	const union acpi_object *o;
+	struct spi_settings *settings = &applespi->spi_settings;
+
+	if (!acpi_dev_get_property(adev, "spiCSDelay", ACPI_TYPE_BUFFER, &o))
+		settings->spi_cs_delay = *(u64 *)o->buffer.pointer;
+	else
+		pr_warn("Property spiCSDelay not found\n");
+
+	if (!acpi_dev_get_property(adev, "resetA2RUsec", ACPI_TYPE_BUFFER, &o))
+		settings->reset_a2r_usec = *(u64 *)o->buffer.pointer;
+	else
+		pr_warn("Property resetA2RUsec not found\n");
+
+	if (!acpi_dev_get_property(adev, "resetRecUsec", ACPI_TYPE_BUFFER, &o))
+		settings->reset_rec_usec = *(u64 *)o->buffer.pointer;
+	else
+		pr_warn("Property resetRecUsec not found\n");
+
+	pr_debug("SPI settings: spi_cs_delay=%llu reset_a2r_usec=%llu "
+		 "reset_rec_usec=%llu\n", settings->spi_cs_delay,
+		 settings->reset_a2r_usec, settings->reset_rec_usec);
+
+	return 0;
+}
+
+#endif
+
 static int applespi_setup_spi(struct applespi_data *applespi)
 {
 	int sts;
 
+#ifdef PRE_SPI_PROPERTIES
 	sts = applespi_get_spi_settings(applespi->handle,
 					&applespi->spi_settings);
+#else
+	sts = applespi_get_spi_settings(applespi);
+#endif
 	if (sts)
 		return sts;
 
@@ -1358,6 +1404,10 @@ static struct spi_driver applespi_driver = {
 	.remove		= applespi_remove,
 };
 
+#ifdef PRE_SPI_PROPERTIES
+
+#define SPI_DEV_CHIP_SEL	0	// from DSDT UBUF
+
 /*
  * All the following code is to deal with the fact that the _CRS method for
  * the SPI device in the DSDT returns an empty resource, and the real info is
@@ -1746,6 +1796,13 @@ static struct acpi_driver appleacpi_driver = {
 	},
 };
 
+
 module_acpi_driver(appleacpi_driver)
+
+#else
+
+module_spi_driver(applespi_driver)
+
+#endif
 
 MODULE_LICENSE("GPL");
