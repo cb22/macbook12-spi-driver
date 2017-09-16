@@ -33,10 +33,7 @@
 #include <linux/wait.h>
 #include <linux/notifier.h>
 #include <linux/leds.h>
-#if defined(DEBUG) || defined(CONFIG_DYNAMIC_DEBUG)
 #include <linux/ktime.h>
-#endif
-
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/input-polldev.h>
