@@ -88,12 +88,12 @@
 static unsigned int fnmode = 1;
 module_param(fnmode, uint, 0644);
 MODULE_PARM_DESC(fnmode, "Mode of fn key on Apple keyboards (0 = disabled, "
-		"[1] = fkeyslast, 2 = fkeysfirst)");
+		 "[1] = fkeyslast, 2 = fkeysfirst)");
 
 static unsigned int iso_layout = 0;
 module_param(iso_layout, uint, 0644);
-MODULE_PARM_DESC(iso_layout, "Enable/Disable hardcoded ISO-layout of the keyboard. "
-		"([0] = disabled, 1 = enabled)");
+MODULE_PARM_DESC(iso_layout, "Enable/Disable hardcoded ISO-layout of the "
+		 "keyboard. ([0] = disabled, 1 = enabled)");
 
 static unsigned int debug = 0;
 module_param(debug, uint, 0644);
@@ -283,10 +283,16 @@ static const struct applespi_key_translation apple_iso_keyboard[] = {
 	{ },
 };
 
-static struct applespi_tp_info applespi_macbookpro131_info = { -6243, 6749, -170, 7685 };
-static struct applespi_tp_info applespi_macbookpro133_info = { -7456, 7976, -163, 9283 };
-// MacBook8, MacBook9, MacBook10
-static struct applespi_tp_info applespi_default_info = { -5087, 5579, -182, 6089 };
+static struct applespi_tp_info applespi_macbookpro131_info = {
+	-6243, 6749, -170, 7685
+};
+static struct applespi_tp_info applespi_macbookpro133_info = {
+	-7456, 7976, -163, 9283
+};
+/* MacBook8, MacBook9, MacBook10 */
+static struct applespi_tp_info applespi_default_info = {
+	-5087, 5579, -182, 6089
+};
 
 static const struct dmi_system_id applespi_touchpad_infos[] = {
 	{
@@ -303,7 +309,7 @@ static const struct dmi_system_id applespi_touchpad_infos[] = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
 			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro13,2")
 		},
-		.driver_data = &applespi_macbookpro131_info,	// same touchpad
+		.driver_data = &applespi_macbookpro131_info, /* same touchpad */
 	},
 	{
 		.ident = "Apple MacBookPro13,3",
@@ -327,7 +333,7 @@ static const struct dmi_system_id applespi_touchpad_infos[] = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
 			DMI_MATCH(DMI_PRODUCT_NAME, "MacBookPro14,2")
 		},
-		.driver_data = &applespi_macbookpro131_info,	// same touchpad
+		.driver_data = &applespi_macbookpro131_info, /* same touchpad */
 	},
 	{
 		.ident = "Apple MacBookPro14,3",
@@ -347,15 +353,61 @@ static const struct dmi_system_id applespi_touchpad_infos[] = {
 };
 
 u8 *applespi_init_commands[] = {
-	"\x40\x02\x00\x00\x00\x00\x0C\x00\x52\x02\x00\x00\x02\x00\x02\x00\x02\x01\x7B\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x23\xAB",
+	"\x40\x02\x00\x00\x00\x00\x0C\x00\x52\x02\x00\x00\x02\x00\x02\x00"
+	"\x02\x01\x7B\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x23\xAB",
 };
 
-u8 *applespi_caps_lock_led_cmd = "\x40\x01\x00\x00\x00\x00\x0C\x00\x51\x01\x00\x00\x02\x00\x02\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x66\x6a";
+u8 *applespi_caps_lock_led_cmd =
+	"\x40\x01\x00\x00\x00\x00\x0C\x00\x51\x01\x00\x00\x02\x00\x02\x00"
+	"\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x66\x6a";
 
-u8 *applespi_kbd_led_cmd = "\x40\x01\x00\x00\x00\x00\x10\x00\x51\xB0\x00\x00\x06\x00\x06\x00\xB0\x01\x3E\x00\xF4\x01\x96\xC5\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x3E\x59";
+u8 *applespi_kbd_led_cmd =
+	"\x40\x01\x00\x00\x00\x00\x10\x00\x51\xB0\x00\x00\x06\x00\x06\x00"
+	"\xB0\x01\x3E\x00\xF4\x01\x96\xC5\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x3E\x59";
 
-static const char *
-applespi_debug_facility(unsigned log_mask)
+static const char *applespi_debug_facility(unsigned log_mask)
 {
 	switch (log_mask) {
 	case DBG_CMD_TP_INI:
@@ -379,9 +431,9 @@ applespi_debug_facility(unsigned log_mask)
 	}
 }
 
-static void
-applespi_setup_read_txfr(struct applespi_data *applespi,
-			 struct spi_transfer *dl_t, struct spi_transfer *rd_t)
+static void applespi_setup_read_txfr(struct applespi_data *applespi,
+				     struct spi_transfer *dl_t,
+				     struct spi_transfer *rd_t)
 {
 	memset(dl_t, 0, sizeof *dl_t);
 	memset(rd_t, 0, sizeof *rd_t);
@@ -392,10 +444,10 @@ applespi_setup_read_txfr(struct applespi_data *applespi,
 	rd_t->len = APPLESPI_PACKET_SIZE;
 }
 
-static void
-applespi_setup_write_txfr(struct applespi_data *applespi,
-			  struct spi_transfer *dl_t, struct spi_transfer *wr_t,
-			  struct spi_transfer *st_t)
+static void applespi_setup_write_txfr(struct applespi_data *applespi,
+				      struct spi_transfer *dl_t,
+				      struct spi_transfer *wr_t,
+				      struct spi_transfer *st_t)
 {
 	memset(dl_t, 0, sizeof *dl_t);
 	memset(wr_t, 0, sizeof *wr_t);
@@ -411,8 +463,8 @@ applespi_setup_write_txfr(struct applespi_data *applespi,
 	st_t->len = APPLESPI_STATUS_SIZE;
 }
 
-static void
-applespi_setup_spi_message(struct spi_message *message, int num_txfrs, ...)
+static void applespi_setup_spi_message(struct spi_message *message,
+				       int num_txfrs, ...)
 {
 	va_list txfrs;
 
@@ -425,9 +477,8 @@ applespi_setup_spi_message(struct spi_message *message, int num_txfrs, ...)
 	va_end(txfrs);
 }
 
-static int
-applespi_async(struct applespi_data *applespi, struct spi_message *message,
-	       void (*complete)(void *))
+static int applespi_async(struct applespi_data *applespi,
+			  struct spi_message *message, void (*complete)(void *))
 {
 	message->complete = complete;
 	message->context = applespi;
@@ -435,8 +486,8 @@ applespi_async(struct applespi_data *applespi, struct spi_message *message,
 	return spi_async(applespi->spi, message);
 }
 
-static inline bool
-applespi_check_write_status(struct applespi_data *applespi, int sts)
+static inline bool applespi_check_write_status(struct applespi_data *applespi,
+					       int sts)
 {
 	static u8 sts_ok[] = { 0xac, 0x27, 0x68, 0xd5 };
 	bool ret = true;
@@ -444,7 +495,8 @@ applespi_check_write_status(struct applespi_data *applespi, int sts)
 	if (sts < 0) {
 		ret = false;
 		pr_warn("Error writing to device: %d\n", sts);
-	} else if (memcmp(applespi->tx_status, sts_ok, APPLESPI_STATUS_SIZE) != 0) {
+	} else if (memcmp(applespi->tx_status, sts_ok,
+			  APPLESPI_STATUS_SIZE) != 0) {
 		ret = false;
 		pr_warn("Error writing to device: %x %x %x %x\n",
 			applespi->tx_status[0], applespi->tx_status[1],
@@ -657,19 +709,18 @@ static void applespi_async_write_complete(void *context)
 {
 	struct applespi_data *applespi = context;
 
-	debug_print(applespi->cmd_log_mask, "--- %s ---------------------------\n",
+	debug_print(applespi->cmd_log_mask, "--- %s ------------------------\n",
 		    applespi_debug_facility(applespi->cmd_log_mask));
-	debug_print_buffer(applespi->cmd_log_mask, "write  ", applespi->tx_buffer,
-			   APPLESPI_PACKET_SIZE);
-	debug_print_buffer(applespi->cmd_log_mask, "status ", applespi->tx_status,
-			   APPLESPI_STATUS_SIZE);
+	debug_print_buffer(applespi->cmd_log_mask, "write  ",
+			   applespi->tx_buffer, APPLESPI_PACKET_SIZE);
+	debug_print_buffer(applespi->cmd_log_mask, "status ",
+			   applespi->tx_status, APPLESPI_STATUS_SIZE);
 
 	if (!applespi_check_write_status(applespi, applespi->wr_m.status))
 		applespi_cmd_msg_complete(applespi);
 }
 
-static int
-applespi_send_cmd_msg(struct applespi_data *applespi)
+static int applespi_send_cmd_msg(struct applespi_data *applespi)
 {
 	u16 crc;
 	int sts;
@@ -689,7 +740,8 @@ applespi_send_cmd_msg(struct applespi_data *applespi)
 		       APPLESPI_PACKET_SIZE);
 
 		applespi->init_cmd_idx++;
-		if (applespi->init_cmd_idx >= ARRAY_SIZE(applespi_init_commands))
+		if (applespi->init_cmd_idx >=
+		    ARRAY_SIZE(applespi_init_commands))
 			applespi->init_cmd_idx = -1;
 
 		applespi->cmd_log_mask = DBG_CMD_TP_INI;
@@ -773,8 +825,8 @@ static void applespi_init(struct applespi_data *applespi)
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 }
 
-static int
-applespi_set_capsl_led(struct applespi_data *applespi, bool capslock_on)
+static int applespi_set_capsl_led(struct applespi_data *applespi,
+				  bool capslock_on)
 {
 	unsigned long flags;
 	int sts;
@@ -789,8 +841,8 @@ applespi_set_capsl_led(struct applespi_data *applespi, bool capslock_on)
 	return sts;
 }
 
-static void
-applespi_set_bl_level(struct led_classdev *led_cdev, enum led_brightness value)
+static void applespi_set_bl_level(struct led_classdev *led_cdev,
+				  enum led_brightness value)
 
 {
 	struct applespi_data *applespi =
@@ -812,16 +864,16 @@ applespi_set_bl_level(struct led_classdev *led_cdev, enum led_brightness value)
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 }
 
-static int
-applespi_event(struct input_dev *dev, unsigned int type, unsigned int code,
-	       int value)
+static int applespi_event(struct input_dev *dev, unsigned int type,
+			  unsigned int code, int value)
 {
 	struct applespi_data *applespi = input_get_drvdata(dev);
 
 	switch (type) {
 
 	case EV_LED:
-		applespi_set_capsl_led(applespi, !!test_bit(LED_CAPSL, dev->led));
+		applespi_set_capsl_led(applespi, !!test_bit(LED_CAPSL,
+				       dev->led));
 		return 0;
 	}
 
@@ -856,7 +908,8 @@ static void report_finger_data(struct input_dev *input, int slot,
 	input_report_abs(input, ABS_MT_POSITION_Y, pos->y);
 }
 
-static int report_tp_state(struct applespi_data *applespi, struct touchpad_protocol* t)
+static int report_tp_state(struct applespi_data *applespi,
+			   struct touchpad_protocol* t)
 {
 	static int min_x = 0, max_x = 0, min_y = 0, max_y = 0;
 	static bool dim_updated = false;
@@ -874,7 +927,8 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 		if (raw2int(f->touch_major) == 0)
 			continue;
 		applespi->pos[n].x = raw2int(f->abs_x);
-		applespi->pos[n].y = tp_info->y_min + tp_info->y_max - raw2int(f->abs_y);
+		applespi->pos[n].y = tp_info->y_min + tp_info->y_max -
+				     raw2int(f->abs_y);
 		n++;
 
 		if (debug & DBG_TP_DIM) {
@@ -915,8 +969,8 @@ static int report_tp_state(struct applespi_data *applespi, struct touchpad_proto
 	return 0;
 }
 
-static const struct applespi_key_translation*
-applespi_find_translation(const struct applespi_key_translation *table, u16 key)
+static const struct applespi_key_translation* applespi_find_translation(
+		const struct applespi_key_translation *table, u16 key)
 {
 	const struct applespi_key_translation *trans;
 
@@ -927,8 +981,7 @@ applespi_find_translation(const struct applespi_key_translation *table, u16 key)
 	return NULL;
 }
 
-static unsigned int
-applespi_code_to_key(u8 code, int fn_pressed)
+static unsigned int applespi_code_to_key(u8 code, int fn_pressed)
 {
 	unsigned int key = applespi_scancodes[code];
 
@@ -959,62 +1012,73 @@ applespi_code_to_key(u8 code, int fn_pressed)
 	return key;
 }
 
-static void
-applespi_handle_keyboard_event(struct applespi_data *applespi,
-			       struct keyboard_protocol *keyboard_protocol)
+static void applespi_handle_keyboard_event(struct applespi_data *applespi,
+				   struct keyboard_protocol *keyboard_protocol)
 {
 	int i, j;
 	unsigned int key;
 	bool still_pressed;
 
-	for (i=0; i<6; i++) {
+	for (i = 0; i < 6; i++) {
 		still_pressed = false;
-		for (j=0; j<6; j++) {
-			if (applespi->last_keys_pressed[i] == keyboard_protocol->keys_pressed[j]) {
+		for (j = 0; j < 6; j++) {
+			if (applespi->last_keys_pressed[i] ==
+			    keyboard_protocol->keys_pressed[j]) {
 				still_pressed = true;
 				break;
 			}
 		}
 
 		if (! still_pressed) {
-			key = applespi_code_to_key(applespi->last_keys_pressed[i], applespi->last_keys_fn_pressed[i]);
+			key = applespi_code_to_key(
+					applespi->last_keys_pressed[i],
+					applespi->last_keys_fn_pressed[i]);
 			input_report_key(applespi->keyboard_input_dev, key, 0);
 			applespi->last_keys_fn_pressed[i] = 0;
 		}
 	}
 
-	for (i=0; i<6; i++) {
-		if (keyboard_protocol->keys_pressed[i] < ARRAY_SIZE(applespi_scancodes) && keyboard_protocol->keys_pressed[i] > 0) {
-			key = applespi_code_to_key(keyboard_protocol->keys_pressed[i], keyboard_protocol->fn_pressed);
+	for (i = 0; i < 6; i++) {
+		if (keyboard_protocol->keys_pressed[i] <
+				ARRAY_SIZE(applespi_scancodes) &&
+		    keyboard_protocol->keys_pressed[i] > 0) {
+			key = applespi_code_to_key(
+					keyboard_protocol->keys_pressed[i],
+					keyboard_protocol->fn_pressed);
 			input_report_key(applespi->keyboard_input_dev, key, 1);
-			applespi->last_keys_fn_pressed[i] = keyboard_protocol->fn_pressed;
+			applespi->last_keys_fn_pressed[i] =
+					keyboard_protocol->fn_pressed;
 		}
 	}
 
-	// Check control keys
-	for (i=0; i<8; i++) {
-		if (test_bit(i, (long unsigned int *)&keyboard_protocol->modifiers)) {
-			input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 1);
+	/* Check control keys */
+	for (i = 0; i < 8; i++) {
+		u8 *modifiers = &keyboard_protocol->modifiers;
+		if (test_bit(i, (unsigned long *)modifiers)) {
+			input_report_key(applespi->keyboard_input_dev,
+					 applespi_controlcodes[i], 1);
 		} else {
-			input_report_key(applespi->keyboard_input_dev, applespi_controlcodes[i], 0);
+			input_report_key(applespi->keyboard_input_dev,
+					 applespi_controlcodes[i], 0);
 		}
 	}
 
-	// Check function key
+	/* Check function key */
 	if (keyboard_protocol->fn_pressed && !applespi->last_fn_pressed) {
 		input_report_key(applespi->keyboard_input_dev, KEY_FN, 1);
-	} else if (!keyboard_protocol->fn_pressed && applespi->last_fn_pressed) {
+	} else if (!keyboard_protocol->fn_pressed &&
+		   applespi->last_fn_pressed) {
 		input_report_key(applespi->keyboard_input_dev, KEY_FN, 0);
 	}
 	applespi->last_fn_pressed = keyboard_protocol->fn_pressed;
 
 	input_sync(applespi->keyboard_input_dev);
-	memcpy(&applespi->last_keys_pressed, keyboard_protocol->keys_pressed, sizeof(applespi->last_keys_pressed));
+	memcpy(&applespi->last_keys_pressed, keyboard_protocol->keys_pressed,
+	       sizeof(applespi->last_keys_pressed));
 }
 
-static void
-applespi_handle_cmd_response(struct applespi_data *applespi,
-			     struct keyboard_protocol *keyboard_protocol)
+static void applespi_handle_cmd_response(struct applespi_data *applespi,
+				 struct keyboard_protocol *keyboard_protocol)
 {
 	if (keyboard_protocol->device == PACKET_DEV_TPAD &&
 	    memcmp(((u8 *) keyboard_protocol) + 8,
@@ -1022,8 +1086,7 @@ applespi_handle_cmd_response(struct applespi_data *applespi,
 		pr_info("modeswitch done.\n");
 }
 
-static void
-applespi_got_data(struct applespi_data *applespi)
+static void applespi_got_data(struct applespi_data *applespi)
 {
 	struct keyboard_protocol *keyboard_protocol;
 	unsigned long flags;
@@ -1045,7 +1108,8 @@ applespi_got_data(struct applespi_data *applespi)
 		debug_print_buffer(DBG_RD_TPAD, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 
-		report_tp_state(applespi, (struct touchpad_protocol*) keyboard_protocol);
+		report_tp_state(applespi,
+				(struct touchpad_protocol*) keyboard_protocol);
 
 	} else if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE) {
 		debug_print(applespi->cmd_log_mask,
@@ -1090,7 +1154,8 @@ static void applespi_async_read_complete(void *context)
 	struct applespi_data *applespi = context;
 
 	if (applespi->rd_m.status < 0)
-		pr_warn("Error reading from device: %d\n", applespi->rd_m.status);
+		pr_warn("Error reading from device: %d\n",
+			applespi->rd_m.status);
 	else
 		applespi_got_data(applespi);
 
@@ -1107,11 +1172,13 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 		    applespi_debug_facility(DBG_RD_IRQ));
 
 	applespi_setup_read_txfr(applespi, &applespi->dl_t, &applespi->rd_t);
-	applespi_setup_spi_message(&applespi->rd_m, 2, &applespi->dl_t, &applespi->rd_t);
+	applespi_setup_spi_message(&applespi->rd_m, 2, &applespi->dl_t,
+				   &applespi->rd_t);
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
-	sts = applespi_async(applespi, &applespi->rd_m, applespi_async_read_complete);
+	sts = applespi_async(applespi, &applespi->rd_m,
+			     applespi_async_read_complete);
 	if (sts != 0)
 		pr_warn("Error queueing async read to device: %d\n", sts);
 	else
@@ -1129,7 +1196,8 @@ static int applespi_probe(struct spi_device *spi)
 	long long unsigned int gpe, usb_status;
 
 	/* Check if the USB interface is present and enabled already */
-	result = acpi_evaluate_integer(ACPI_HANDLE(&spi->dev), "UIST", NULL, &usb_status);
+	result = acpi_evaluate_integer(ACPI_HANDLE(&spi->dev), "UIST", NULL,
+				       &usb_status);
 	if (ACPI_SUCCESS(result) && usb_status) {
 		/* Let the USB driver take over instead */
 		pr_info("USB interface already enabled\n");
@@ -1148,16 +1216,22 @@ static int applespi_probe(struct spi_device *spi)
 	spi_set_drvdata(spi, applespi);
 
 	/* Create our buffers */
-	applespi->tx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE, GFP_KERNEL);
-	applespi->tx_status = devm_kmalloc(&spi->dev, APPLESPI_STATUS_SIZE, GFP_KERNEL);
-	applespi->rx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE, GFP_KERNEL);
+	applespi->tx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE,
+					   GFP_KERNEL);
+	applespi->tx_status = devm_kmalloc(&spi->dev, APPLESPI_STATUS_SIZE,
+					   GFP_KERNEL);
+	applespi->rx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE,
+					   GFP_KERNEL);
 
-	if (!applespi->tx_buffer || !applespi->tx_status || !applespi->rx_buffer)
+	if (!applespi->tx_buffer || !applespi->tx_status ||
+	    !applespi->rx_buffer)
 		return -ENOMEM;
 
 	/* Cache ACPI method handles */
-	if (ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIEN", &applespi->sien)) ||
-	    ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIST", &applespi->sist))) {
+	if (ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIEN",
+					 &applespi->sien)) ||
+	    ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIST",
+					 &applespi->sist))) {
 		pr_err("Failed to get required ACPI method handle\n");
 		return -ENODEV;
 	}
@@ -1172,7 +1246,8 @@ static int applespi_probe(struct spi_device *spi)
 		return result;
 
 	/* Set up touchpad dimensions */
-	applespi->tp_info = dmi_first_match(applespi_touchpad_infos)->driver_data;
+	applespi->tp_info =
+			dmi_first_match(applespi_touchpad_infos)->driver_data;
 
 	/* Setup the keyboard input dev */
 	applespi->keyboard_input_dev = devm_input_allocate_device(&spi->dev);
@@ -1185,23 +1260,27 @@ static int applespi_probe(struct spi_device *spi)
 	applespi->keyboard_input_dev->dev.parent = &spi->dev;
 	applespi->keyboard_input_dev->id.bustype = BUS_SPI;
 
-	applespi->keyboard_input_dev->evbit[0] = BIT_MASK(EV_KEY) | BIT_MASK(EV_LED) | BIT_MASK(EV_REP);
+	applespi->keyboard_input_dev->evbit[0] =
+			BIT_MASK(EV_KEY) | BIT_MASK(EV_LED) | BIT_MASK(EV_REP);
 	applespi->keyboard_input_dev->ledbit[0] = BIT_MASK(LED_CAPSL);
 
 	input_set_drvdata(applespi->keyboard_input_dev, applespi);
 	applespi->keyboard_input_dev->event = applespi_event;
 
-	for (i = 0; i<ARRAY_SIZE(applespi_scancodes); i++)
+	for (i = 0; i < ARRAY_SIZE(applespi_scancodes); i++)
 		if (applespi_scancodes[i])
-			input_set_capability(applespi->keyboard_input_dev, EV_KEY, applespi_scancodes[i]);
+			input_set_capability(applespi->keyboard_input_dev,
+					     EV_KEY, applespi_scancodes[i]);
 
-	for (i = 0; i<ARRAY_SIZE(applespi_controlcodes); i++)
+	for (i = 0; i < ARRAY_SIZE(applespi_controlcodes); i++)
 		if (applespi_controlcodes[i])
-			input_set_capability(applespi->keyboard_input_dev, EV_KEY, applespi_controlcodes[i]);
+			input_set_capability(applespi->keyboard_input_dev,
+					     EV_KEY, applespi_controlcodes[i]);
 
-	for (i = 0; i<ARRAY_SIZE(applespi_fn_codes); i++)
+	for (i = 0; i < ARRAY_SIZE(applespi_fn_codes); i++)
 		if (applespi_fn_codes[i].to)
-			input_set_capability(applespi->keyboard_input_dev, EV_KEY, applespi_fn_codes[i].to);
+			input_set_capability(applespi->keyboard_input_dev,
+					     EV_KEY, applespi_fn_codes[i].to);
 
 	input_set_capability(applespi->keyboard_input_dev, EV_KEY, KEY_FN);
 
@@ -1223,7 +1302,8 @@ static int applespi_probe(struct spi_device *spi)
 	applespi->touchpad_input_dev->dev.parent = &spi->dev;
 	applespi->touchpad_input_dev->id.bustype = BUS_SPI;
 
-	applespi->touchpad_input_dev->relbit[0] = BIT_MASK(REL_X) | BIT_MASK(REL_Y);
+	applespi->touchpad_input_dev->relbit[0] =
+					BIT_MASK(REL_X) | BIT_MASK(REL_Y);
 
 	__set_bit(EV_KEY, applespi->touchpad_input_dev->evbit);
 	__set_bit(EV_ABS, applespi->touchpad_input_dev->evbit);
@@ -1234,21 +1314,32 @@ static int applespi_probe(struct spi_device *spi)
 	__set_bit(INPUT_PROP_BUTTONPAD, applespi->touchpad_input_dev->propbit);
 
 	/* finger touch area */
-	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_TOUCH_MAJOR, 0, 2048, 0, 0);
-	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_TOUCH_MINOR, 0, 2048, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_TOUCH_MAJOR,
+			     0, 2048, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_TOUCH_MINOR,
+			     0, 2048, 0, 0);
 
 	/* finger approach area */
-	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_WIDTH_MAJOR, 0, 2048, 0, 0);
-	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_WIDTH_MINOR, 0, 2048, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_WIDTH_MAJOR,
+			     0, 2048, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_WIDTH_MINOR,
+			     0, 2048, 0, 0);
 
 	/* finger orientation */
-	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_ORIENTATION, -MAX_FINGER_ORIENTATION, MAX_FINGER_ORIENTATION, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_ORIENTATION,
+			     -MAX_FINGER_ORIENTATION, MAX_FINGER_ORIENTATION,
+			     0, 0);
 
 	/* finger position */
-	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_X, applespi->tp_info->x_min, applespi->tp_info->x_max, 0, 0);
-	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_Y, applespi->tp_info->y_min, applespi->tp_info->y_max, 0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_X,
+			     applespi->tp_info->x_min, applespi->tp_info->x_max,
+			     0, 0);
+	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_Y,
+			     applespi->tp_info->y_min, applespi->tp_info->y_max,
+			     0, 0);
 
-	input_set_capability(applespi->touchpad_input_dev, EV_KEY, BTN_TOOL_FINGER);
+	input_set_capability(applespi->touchpad_input_dev, EV_KEY,
+			     BTN_TOOL_FINGER);
 	input_set_capability(applespi->touchpad_input_dev, EV_KEY, BTN_TOUCH);
 	input_set_capability(applespi->touchpad_input_dev, EV_KEY, BTN_LEFT);
 
@@ -1274,7 +1365,9 @@ static int applespi_probe(struct spi_device *spi)
 	}
 	applespi->gpe = (int)gpe;
 
-	result = acpi_install_gpe_handler(NULL, applespi->gpe, ACPI_GPE_LEVEL_TRIGGERED, applespi_notify, applespi);
+	result = acpi_install_gpe_handler(NULL, applespi->gpe,
+					  ACPI_GPE_LEVEL_TRIGGERED,
+					  applespi_notify, applespi);
 	if (ACPI_FAILURE(result)) {
 		pr_err("Failed to install GPE handler for GPE %d: %s\n",
 		       applespi->gpe, acpi_format_exception(result));
@@ -1406,7 +1499,7 @@ static struct spi_driver applespi_driver = {
 
 #ifdef PRE_SPI_PROPERTIES
 
-#define SPI_DEV_CHIP_SEL	0	// from DSDT UBUF
+#define SPI_DEV_CHIP_SEL	0	/* from DSDT UBUF */
 
 /*
  * All the following code is to deal with the fact that the _CRS method for
@@ -1441,14 +1534,14 @@ static int appleacpi_config_spi_dev(struct spi_device *spi,
 		(settings.spi_sph * SPI_CPHA) |
 		(settings.spi_bit_order == 0 ? SPI_LSB_FIRST : 0);
 
-	spi->irq = -1;		// uses GPE
+	spi->irq = -1;		/* uses GPE */
 
 	spi->dev.platform_data = NULL;
 	spi->controller_data = NULL;
 	spi->controller_state = NULL;
 
-	pr_debug("spi-config: max_speed_hz=%d, chip_select=%d, bits_per_word=%d,"
-		 " mode=%x, irq=%d\n", spi->max_speed_hz, spi->chip_select,
+	pr_debug("spi-config: max_speed_hz=%d, chip_select=%d, bits_per_word=%d"
+		 ", mode=%x, irq=%d\n", spi->max_speed_hz, spi->chip_select,
 		 spi->bits_per_word, spi->mode, spi->irq);
 
 	return 0;
@@ -1585,7 +1678,8 @@ release_master:
 static void appleacpi_dev_registration_worker(struct work_struct *work)
 {
 	struct appleacpi_spi_registration_info *info =
-		container_of(work, struct appleacpi_spi_registration_info, work.work);
+		container_of(work, struct appleacpi_spi_registration_info,
+			     work.work);
 
 	if (info->spi_master && !info->spi_master->running) {
 		pr_debug_ratelimited("spi-master device is not running yet\n");
