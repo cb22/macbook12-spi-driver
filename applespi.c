@@ -54,6 +54,7 @@
 #define PACKET_DEV_TPAD         0x02
 
 #define MAX_ROLLOVER 		6
+#define MAX_MODIFIERS 		8
 
 #define MAX_FINGERS		6
 #define MAX_FINGER_ORIENTATION	16384
@@ -108,7 +109,7 @@ struct keyboard_protocol {
 	u8		unknown2[5];
 	u8		modifiers;
 	u8		unknown3;
-	u8		keys_pressed[6];
+	u8		keys_pressed[MAX_ROLLOVER];
 	u8		fn_pressed;
 	u16		crc_16;
 	u8		unused[228];
@@ -1019,9 +1020,9 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 	unsigned int key;
 	bool still_pressed;
 
-	for (i = 0; i < 6; i++) {
+	for (i = 0; i < MAX_ROLLOVER; i++) {
 		still_pressed = false;
-		for (j = 0; j < 6; j++) {
+		for (j = 0; j < MAX_ROLLOVER; j++) {
 			if (applespi->last_keys_pressed[i] ==
 			    keyboard_protocol->keys_pressed[j]) {
 				still_pressed = true;
@@ -1038,7 +1039,7 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 		}
 	}
 
-	for (i = 0; i < 6; i++) {
+	for (i = 0; i < MAX_ROLLOVER; i++) {
 		if (keyboard_protocol->keys_pressed[i] <
 				ARRAY_SIZE(applespi_scancodes) &&
 		    keyboard_protocol->keys_pressed[i] > 0) {
@@ -1052,7 +1053,7 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 	}
 
 	/* Check control keys */
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < MAX_MODIFIERS; i++) {
 		u8 *modifiers = &keyboard_protocol->modifiers;
 		if (test_bit(i, (unsigned long *)modifiers)) {
 			input_report_key(applespi->keyboard_input_dev,
