@@ -1,12 +1,12 @@
-Very simple, work in progress input driver for the SPI keyboard / trackpad found on 12" MacBooks. 
+Very simple, work in progress input driver for the SPI keyboard / trackpad found on 12" MacBooks (2015 and later) and newer MacBook Pros (late 2016 and later).
 
 Using it:
 ---------
-To get this driver to work on a 2016 12" MacBook or a 2016 MacBook Pro, you'll need to boot the kernel with `intremap=nosid` if you're running a kernel before 4.11. Make sure you don't have `noapic` in your kernel options.
+If you're on a MacBook8,1 (2015) you may need the `irqpoll` kernel parameter. To get this driver to work on all other MacBooks and MacBook Pros, you'll need to boot the kernel with `intremap=nosid` if you're running a kernel before 4.11. In all cases make sure you don't have `noapic` in your kernel options.
 
-Additionally, you need to make sure the `spi_pxa2xx_platform` and `intel_lpss_pci` modules are loaded. This should result in the intel-lpss driver attaching itself to the SPI controller. 
+On the 2015 MacBook you need to (re)compile your kernel with `CONFIG_X86_INTEL_LPSS=n` if running a kernel before 4.14. On all kernels you need ensure the `spi_pxa2xx_platform` module is loaded (if you don't have that module, rebuild your kernel with `CONFIG_SPI_PXA2XX=m`).
 
-On the 2015 MacBook you currently need to (re)compile your kernel with `CONFIG_X86_INTEL_LPSS=n`.
+On all other MacBook's and MacBook Pros you need to make sure both the `spi_pxa2xx_platform` and `intel_lpss_pci` modules are loaded (if these don't exist, you need to (re)compile your kernel with `CONFIG_SPI_PXA2XX=m` and `CONFIG_MFD_INTEL_LPSS_PCI=m`).
 
 DKMS module (Debian & co):
 --------------------------
