@@ -432,10 +432,12 @@ static const char *applespi_debug_facility(unsigned log_mask)
 	}
 }
 
-static void applespi_setup_read_txfr(struct applespi_data *applespi,
-				     struct spi_transfer *dl_t,
-				     struct spi_transfer *rd_t)
+static void applespi_setup_read_txfrs(struct applespi_data *applespi)
 {
+	struct spi_message *msg = &applespi->rd_m;
+	struct spi_transfer *dl_t = &applespi->dl_t;
+	struct spi_transfer *rd_t = &applespi->rd_t;
+
 	memset(dl_t, 0, sizeof *dl_t);
 	memset(rd_t, 0, sizeof *rd_t);
 
@@ -443,13 +445,19 @@ static void applespi_setup_read_txfr(struct applespi_data *applespi,
 
 	rd_t->rx_buf = applespi->rx_buffer;
 	rd_t->len = APPLESPI_PACKET_SIZE;
+
+	spi_message_init(msg);
+	spi_message_add_tail(dl_t, msg);
+	spi_message_add_tail(rd_t, msg);
 }
 
-static void applespi_setup_write_txfr(struct applespi_data *applespi,
-				      struct spi_transfer *dl_t,
-				      struct spi_transfer *wr_t,
-				      struct spi_transfer *st_t)
+static void applespi_setup_write_txfrs(struct applespi_data *applespi)
 {
+	struct spi_message *msg = &applespi->wr_m;
+	struct spi_transfer *dl_t = &applespi->wd_t;
+	struct spi_transfer *wr_t = &applespi->wr_t;
+	struct spi_transfer *st_t = &applespi->st_t;
+
 	memset(dl_t, 0, sizeof *dl_t);
 	memset(wr_t, 0, sizeof *wr_t);
 	memset(st_t, 0, sizeof *st_t);
@@ -462,20 +470,11 @@ static void applespi_setup_write_txfr(struct applespi_data *applespi,
 
 	st_t->rx_buf = applespi->tx_status;
 	st_t->len = APPLESPI_STATUS_SIZE;
-}
 
-static void applespi_setup_spi_message(struct spi_message *message,
-				       int num_txfrs, ...)
-{
-	va_list txfrs;
-
-	spi_message_init(message);
-
-	va_start(txfrs, num_txfrs);
-	while (num_txfrs-- > 0)
-		spi_message_add_tail(va_arg(txfrs, struct spi_transfer *),
-				     message);
-	va_end(txfrs);
+	spi_message_init(msg);
+	spi_message_add_tail(dl_t, msg);
+	spi_message_add_tail(wr_t, msg);
+	spi_message_add_tail(st_t, msg);
 }
 
 static int applespi_async(struct applespi_data *applespi,
@@ -795,11 +794,6 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	}
 
 	/* send command */
-	applespi_setup_write_txfr(applespi, &applespi->wd_t, &applespi->wr_t,
-				  &applespi->st_t);
-	applespi_setup_spi_message(&applespi->wr_m, 3, &applespi->wd_t,
-				   &applespi->wr_t, &applespi->st_t);
-
 	sts = applespi_async(applespi, &applespi->wr_m,
 			     applespi_async_write_complete);
 
@@ -1172,10 +1166,6 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 	debug_print(DBG_RD_IRQ, "--- %s ---------------------------\n",
 		    applespi_debug_facility(DBG_RD_IRQ));
 
-	applespi_setup_read_txfr(applespi, &applespi->dl_t, &applespi->rd_t);
-	applespi_setup_spi_message(&applespi->rd_m, 2, &applespi->dl_t,
-				   &applespi->rd_t);
-
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
 	sts = applespi_async(applespi, &applespi->rd_m,
@@ -1227,6 +1217,10 @@ static int applespi_probe(struct spi_device *spi)
 	if (!applespi->tx_buffer || !applespi->tx_status ||
 	    !applespi->rx_buffer)
 		return -ENOMEM;
+
+	/* Set up our spi messages */
+	applespi_setup_read_txfrs(applespi);
+	applespi_setup_write_txfrs(applespi);
 
 	/* Cache ACPI method handles */
 	if (ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIEN",
