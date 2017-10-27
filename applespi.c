@@ -1460,12 +1460,31 @@ static int applespi_suspend(struct device *dev)
 	struct spi_device *spi = to_spi_device(dev);
 	struct applespi_data *applespi = spi_get_drvdata(spi);
 	acpi_status status;
+	unsigned long flags;
 
+	/* wait for all outstanding writes to finish */
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	applespi->drain = true;
+	wait_event_lock_irq(applespi->drain_complete, !applespi->write_active,
+			    applespi->cmd_msg_lock);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
+	/* disable the interrupt */
 	status = acpi_disable_gpe(NULL, applespi->gpe);
 	if (ACPI_FAILURE(status)) {
 		pr_err("Failed to disable GPE handler for GPE %d: %s\n",
 		       applespi->gpe, acpi_format_exception(status));
 	}
+
+	/* wait for all outstanding reads to finish */
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	wait_event_lock_irq(applespi->drain_complete, !applespi->read_active,
+			    applespi->cmd_msg_lock);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 
 	pr_info("spi-device suspend done.\n");
 	return 0;
@@ -1477,6 +1496,15 @@ static int applespi_resume(struct device *dev)
 	struct applespi_data *applespi = spi_get_drvdata(spi);
 	acpi_status status;
 
+	/* ensure our flags and state reflect a newly resumed device */
+	applespi->drain = false;
+	applespi->have_cl_led_on = false;
+	applespi->have_bl_level = 0;
+	applespi->cmd_msg_queued = false;
+	applespi->read_active = false;
+	applespi->write_active = false;
+
+	/* re-enable the interrupt */
 	status = acpi_enable_gpe(NULL, applespi->gpe);
 	if (ACPI_FAILURE(status)) {
 		pr_err("Failed to re-enable GPE handler for GPE %d: %s\n",
