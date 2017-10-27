@@ -1797,7 +1797,6 @@ static int appleacpi_probe(struct acpi_device *adev)
 
 	reg_info = kzalloc(sizeof(*reg_info), GFP_KERNEL);
 	if (!reg_info) {
-		pr_err("Failed to allocate registration-info\n");
 		ret = -ENOMEM;
 		goto unregister_driver;
 	}
