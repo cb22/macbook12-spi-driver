@@ -2,32 +2,33 @@ Very simple, work in progress input driver for the SPI keyboard / trackpad found
 
 Using it:
 ---------
-If you're on a MacBook8,1 (2015) you will need to use `spi_pxa2xx_pci` instead of `intel_lpss_pci`. To get this driver to work on all other MacBooks and MacBook Pros, you'll need to boot the kernel with `intremap=nosid` if you're running a kernel before 4.11. In all cases make sure you don't have `noapic` in your kernel options.
+If you're on any MacBook or MacBook Pro other than MacBook8,1 (2015), and you're running a kernel before 4.11, then you'll need to boot the kernel with `intremap=nosid`. In all cases make sure you don't have `noapic` in your kernel options.
 
-On the 2015 MacBook you need to (re)compile your kernel with `CONFIG_X86_INTEL_LPSS=n` if running a kernel before 4.14. On all kernels you need ensure the `spi_pxa2xx_platform` module is loaded (if you don't have that module, rebuild your kernel with `CONFIG_SPI_PXA2XX=m`).
+On the 2015 MacBook you need to (re)compile your kernel with `CONFIG_X86_INTEL_LPSS=n` if running a kernel before 4.14. And on all kernels you need ensure the `spi_pxa2xx_platform` and `spi_pxa2xx_pci` modules are loaded too (if you don't have those module, rebuild your kernel with `CONFIG_SPI_PXA2XX=m` and `CONFIG_SPI_PXA2XX_PCI=m`).
 
-On all other MacBook's and MacBook Pros you need to make sure both the `spi_pxa2xx_platform` and `intel_lpss_pci` modules are loaded (if these don't exist, you need to (re)compile your kernel with `CONFIG_SPI_PXA2XX=m` and `CONFIG_MFD_INTEL_LPSS_PCI=m`).
+On all other MacBook's and MacBook Pros you need to instead make sure both the `spi_pxa2xx_platform` and `intel_lpss_pci` modules are loaded (if these don't exist, you need to (re)compile your kernel with `CONFIG_SPI_PXA2XX=m` and `CONFIG_MFD_INTEL_LPSS_PCI=m`).
+
+For best results everywhere, make sure all three modules (this `applespi` driver plus the two core ones mentioned above) are present in your initramfs/initrd so that the keyboard is functional by the time the prompt for the disk password appears. Also, having them loaded early also appears to remove the need for the `irqpoll` kernel parameter on MacBook8,1's.
+
 
 DKMS module (Debian & co):
 --------------------------
-As root, do the following (most MacBooks):
+As root, do the following (all MacBook's and MacBook Pro's except MacBook8,1 (2015)):
 ```
+echo -e "\n# applespi\napplespi\nspi_pxa2xx_platform\nintel_lpss_pci" >> /etc/initramfs-tools/modules
+
 apt install dkms
 git clone https://github.com/cb22/macbook12-spi-driver.git /usr/src/applespi-0.1
 dkms install -m applespi -v 0.1
-
-echo -e "\n# applespi\napplespi\nintel_lpss_pci\nspi_pxa2xx_platform" >> /etc/initramfs-tools/modules
-update-initramfs -u
 ```
 
 If you're on a MacBook8,1 (2015):
 ```
+echo -e "\n# applespi\napplespi\nspi_pxa2xx_platform\nspi_pxa2xx_pci" >> /etc/initramfs-tools/modules
+
 apt install dkms
 git clone https://github.com/cb22/macbook12-spi-driver.git /usr/src/applespi-0.1
 dkms install -m applespi -v 0.1
-
-echo -e "\n# applespi\napplespi\nspi_pxa2xx_platform\nspi_pxa2xx_pci" >> /etc/initramfs-tools/modules
-update-initramfs -u
 ```
 
 What works:
