@@ -59,6 +59,7 @@
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/input-polldev.h>
+#include <linux/efi.h>
 
 #include <linux/version.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
@@ -90,6 +91,9 @@
 #define KBD_BL_LEVEL_SCALE	1000000
 #define KBD_BL_LEVEL_ADJ	\
 	((MAX_KBD_BL_LEVEL - MIN_KBD_BL_LEVEL) * KBD_BL_LEVEL_SCALE / 255)
+
+#define EFI_BL_LEVEL_NAME	L"KeyboardBacklightLevel"
+#define EFI_BL_LEVEL_GUID	EFI_GUID(0xa076d2af, 0x9678, 0x4386, 0x8b, 0x58, 0x1f, 0xc8, 0xef, 0x04, 0x16, 0x19)
 
 #define DBG_CMD_TP_INI		BIT(0)
 #define DBG_CMD_BL		BIT(1)
@@ -1479,6 +1483,53 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 	return ACPI_INTERRUPT_HANDLED;
 }
 
+static int applespi_get_saved_bl_level(void)
+{
+	struct efivar_entry *efivar_entry;
+	u16 efi_data = 0;
+	unsigned long efi_data_len;
+	int sts;
+
+	efivar_entry = kmalloc(sizeof(*efivar_entry), GFP_KERNEL);
+	if (!efivar_entry)
+		return -1;
+
+	memcpy(efivar_entry->var.VariableName, EFI_BL_LEVEL_NAME,
+	       sizeof(EFI_BL_LEVEL_NAME));
+	efivar_entry->var.VendorGuid = EFI_BL_LEVEL_GUID;
+	efi_data_len = sizeof(efi_data);
+
+	sts = efivar_entry_get(efivar_entry, NULL, &efi_data_len, &efi_data);
+	if (sts && sts != -ENOENT)
+		pr_warn("Error getting backlight level from EFI vars: %d\n",
+			sts);
+
+	kfree(efivar_entry);
+
+	return efi_data;
+}
+
+static void applespi_save_bl_level(unsigned int level)
+{
+	efi_guid_t efi_guid;
+	u32 efi_attr;
+	unsigned long efi_data_len;
+	u16 efi_data;
+	int sts;
+
+	/* Save keyboard backlight level */
+	efi_guid = EFI_BL_LEVEL_GUID;
+	efi_data = (u16)level;
+	efi_data_len = sizeof(efi_data);
+	efi_attr = EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS |
+		   EFI_VARIABLE_RUNTIME_ACCESS;
+
+	sts = efivar_entry_set_safe(EFI_BL_LEVEL_NAME, efi_guid, efi_attr, true,
+				    efi_data_len, &efi_data);
+	if (sts != EFI_SUCCESS)
+		pr_warn("Error saving backlight level to EFI vars: %d\n", sts);
+}
+
 static int applespi_probe(struct spi_device *spi)
 {
 	struct applespi_data *applespi;
@@ -1692,6 +1743,10 @@ static int applespi_probe(struct spi_device *spi)
 	applespi_init(applespi);
 
 	/* set up keyboard-backlight */
+	result = applespi_get_saved_bl_level();
+	if (result >= 0)
+		applespi_set_bl_level(&applespi->backlight_info, result);
+
 	applespi->backlight_info.name            = "spi::kbd_backlight";
 	applespi->backlight_info.default_trigger = "kbd-backlight";
 	applespi->backlight_info.brightness_set  = applespi_set_bl_level;
@@ -1738,6 +1793,23 @@ static int applespi_remove(struct spi_device *spi)
 
 	/* done */
 	pr_info("spi-device remove done: %s\n", dev_name(&spi->dev));
+	return 0;
+}
+
+static void applespi_shutdown(struct spi_device *spi)
+{
+	struct applespi_data *applespi = spi_get_drvdata(spi);
+
+	applespi_save_bl_level(applespi->have_bl_level);
+}
+
+static int applespi_poweroff_late(struct device *dev)
+{
+	struct spi_device *spi = to_spi_device(dev);
+	struct applespi_data *applespi = spi_get_drvdata(spi);
+
+	applespi_save_bl_level(applespi->have_bl_level);
+
 	return 0;
 }
 
@@ -1814,7 +1886,10 @@ static const struct acpi_device_id applespi_acpi_match[] = {
 };
 MODULE_DEVICE_TABLE(acpi, applespi_acpi_match);
 
-static SIMPLE_DEV_PM_OPS(applespi_pm_ops, applespi_suspend, applespi_resume);
+const struct dev_pm_ops applespi_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(applespi_suspend, applespi_resume)
+	.poweroff_late	= applespi_poweroff_late,
+};
 
 static struct spi_driver applespi_driver = {
 	.driver		= {
@@ -1826,6 +1901,7 @@ static struct spi_driver applespi_driver = {
 	},
 	.probe		= applespi_probe,
 	.remove		= applespi_remove,
+	.shutdown	= applespi_shutdown,
 };
 
 #ifdef PRE_SPI_PROPERTIES
