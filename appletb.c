@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Apple Touchbar Driver
+ *
+ * Copyright (c) 2017-2018 Ronald Tschalär
+ */
+
 /**
  * This is a basic driver to enable the touchbar on a MacBookPro13,2 and
  * MacBookPro13,3. The touchbar shows up as two HID interfaces on the iBridge
