@@ -1,3 +1,12 @@
+/*
+ * MacBook (Pro) SPI keyboard and touchpad driver
+ *
+ * Copyright (c) 2015-2018 Federico Lorenzi
+ * Copyright (c) 2017-2018 Ronald Tschalär
+ *
+ * SPDX-License-Identifier: GPL-2.0
+ */
+
 /**
  * The keyboard and touchpad controller on the MacBook8,1, MacBook9,1 and
  * MacBookPro12,1 can be driven either by USB or SPI. However the USB pins
