@@ -385,7 +385,7 @@ struct applespi_data {
 	struct spi_transfer		st_t;
 	struct spi_message		wr_m;
 
-	int				init_cmd_idx;
+	bool				want_init_cmd;
 	bool				want_cl_led_on;
 	bool				have_cl_led_on;
 	unsigned int			want_bl_level;
@@ -538,61 +538,6 @@ static const struct dmi_system_id applespi_touchpad_infos[] = {
 		.driver_data = &applespi_default_info,
 	},
 };
-
-u8 *applespi_init_commands[] = {
-	"\x40\x02\x00\x00\x00\x00\x0C\x00\x52\x02\x00\x00\x02\x00\x02\x00"
-	"\x02\x01\x7B\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x23\xAB",
-};
-
-u8 *applespi_caps_lock_led_cmd =
-	"\x40\x01\x00\x00\x00\x00\x0C\x00\x51\x01\x00\x00\x02\x00\x02\x00"
-	"\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x66\x6a";
-
-u8 *applespi_kbd_led_cmd =
-	"\x40\x01\x00\x00\x00\x00\x10\x00\x51\xB0\x00\x00\x06\x00\x06\x00"
-	"\xB0\x01\x3E\x00\xF4\x01\x96\xC5\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-	"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x3E\x59";
 
 static const char *applespi_debug_facility(unsigned int log_mask)
 {
@@ -925,6 +870,10 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 {
 	u16 crc;
 	int sts;
+	struct spi_packet *packet = (struct spi_packet *)applespi->tx_buffer;
+	struct message *message = (struct message *)packet->data;
+	u16 msg_len;
+	u8 device;
 
 	/* check if draining */
 	if (applespi->drain)
@@ -934,34 +883,35 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	if (applespi->cmd_msg_queued)
 		return 0;
 
+	/* set up packet */
+	memset(packet, 0, APPLESPI_PACKET_SIZE);
+
 	/* are we processing init commands? */
-	if (applespi->init_cmd_idx >= 0) {
-		memcpy(applespi->tx_buffer,
-		       applespi_init_commands[applespi->init_cmd_idx],
-		       APPLESPI_PACKET_SIZE);
-
-		applespi->init_cmd_idx++;
-		if (applespi->init_cmd_idx >=
-		    ARRAY_SIZE(applespi_init_commands))
-			applespi->init_cmd_idx = -1;
-
+	if (applespi->want_init_cmd) {
+		applespi->want_init_cmd = false;
 		applespi->cmd_log_mask = DBG_CMD_TP_INI;
+
+		/* build init command */
+		device = PACKET_DEV_TPAD;
+
+		message->type = cpu_to_le16(0x0252);
+		msg_len = sizeof(message->init_command);
+
+		message->init_command.cmd = cpu_to_le16(0x0102);
 
 	/* do we need caps-lock command? */
 	} else if (applespi->want_cl_led_on != applespi->have_cl_led_on) {
 		applespi->have_cl_led_on = applespi->want_cl_led_on;
 		applespi->cmd_log_mask = DBG_CMD_CL;
 
-		/* build led command buffer */
-		memcpy(applespi->tx_buffer, applespi_caps_lock_led_cmd,
-		       APPLESPI_PACKET_SIZE);
+		/* build led command */
+		device = PACKET_DEV_KEYB;
 
-		applespi->tx_buffer[11] = applespi->cmd_msg_cntr++ & 0xff;
-		applespi->tx_buffer[17] = applespi->have_cl_led_on ? 2 : 0;
+		message->type = cpu_to_le16(0x0151);
+		msg_len = sizeof(message->capsl_command);
 
-		crc = crc16(0, applespi->tx_buffer + 8, 10);
-		applespi->tx_buffer[18] = crc & 0xff;
-		applespi->tx_buffer[19] = crc >> 8;
+		message->capsl_command.unknown = 0x01;
+		message->capsl_command.led = applespi->have_cl_led_on ? 2 : 0;
 
 	/* do we need backlight command? */
 	} else if (applespi->want_bl_level != applespi->have_bl_level) {
@@ -969,30 +919,40 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 		applespi->cmd_log_mask = DBG_CMD_BL;
 
 		/* build command buffer */
-		memcpy(applespi->tx_buffer, applespi_kbd_led_cmd,
-		       APPLESPI_PACKET_SIZE);
+		device = PACKET_DEV_KEYB;
 
-		applespi->tx_buffer[11] = applespi->cmd_msg_cntr++ & 0xff;
+		message->type = cpu_to_le16(0xB051);
+		msg_len = sizeof(message->bl_command);
 
-		applespi->tx_buffer[18] = applespi->have_bl_level & 0xff;
-		applespi->tx_buffer[19] = applespi->have_bl_level >> 8;
+		message->bl_command.const1 = cpu_to_le16(0x01B0);
+		message->bl_command.level =
+				cpu_to_le16(applespi->have_bl_level);
 
-		if (applespi->have_bl_level > 0) {
-			applespi->tx_buffer[20] = 0xF4;
-			applespi->tx_buffer[21] = 0x01;
-		} else {
-			applespi->tx_buffer[20] = 0x01;
-			applespi->tx_buffer[21] = 0x00;
-		}
-
-		crc = crc16(0, applespi->tx_buffer + 8, 14);
-		applespi->tx_buffer[22] = crc & 0xff;
-		applespi->tx_buffer[23] = crc >> 8;
+		if (applespi->have_bl_level > 0)
+			message->bl_command.const2 = cpu_to_le16(0x01F4);
+		else
+			message->bl_command.const2 = cpu_to_le16(0x0001);
 
 	/* everything's up-to-date */
 	} else {
 		return 0;
 	}
+
+	/* finalize packet */
+	packet->flags = PACKET_TYPE_WRITE;
+	packet->device = device;
+	packet->length = cpu_to_le16(MSG_HEADER_SIZE + msg_len);
+
+	message->counter = applespi->cmd_msg_cntr++ & 0xff;
+
+	message->length = cpu_to_le16(msg_len - 2);
+	message->rsp_buf_len = message->length;
+
+	crc = crc16(0, (u8 *)message, le16_to_cpu(packet->length) - 2);
+	*((__le16 *)&message->data[msg_len - 2]) = cpu_to_le16(crc);
+
+	crc = crc16(0, (u8 *)packet, sizeof(*packet) - 2);
+	packet->crc_16 = cpu_to_le16(crc);
 
 	/* send command */
 	sts = applespi_async(applespi, &applespi->wr_m,
@@ -1014,7 +974,7 @@ static void applespi_init(struct applespi_data *applespi)
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
-	applespi->init_cmd_idx = 0;
+	applespi->want_init_cmd = true;
 	applespi_send_cmd_msg(applespi);
 
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
@@ -1286,8 +1246,16 @@ static void applespi_handle_cmd_response(struct applespi_data *applespi,
 					 struct spi_packet *packet,
 					 struct message *message)
 {
+	if (le16_to_cpu(message->length) != 0x0000) {
+		dev_warn_ratelimited(&applespi->spi->dev,
+				     "Received unexpected write response: length=%x\n",
+				     le16_to_cpu(message->length));
+		return;
+	}
+
 	if (packet->device == PACKET_DEV_TPAD &&
-	    memcmp(message, applespi_init_commands[0] + 8, 4) == 0)
+	    le16_to_cpu(message->type) == 0x0252 &&
+	    le16_to_cpu(message->rsp_buf_len) == 0x0002)
 		pr_info("modeswitch done.\n");
 }
 
