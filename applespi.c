@@ -1291,13 +1291,58 @@ static void applespi_handle_cmd_response(struct applespi_data *applespi,
 		pr_info("modeswitch done.\n");
 }
 
+static bool applespi_verify_crc(struct applespi_data *applespi, u8 *buffer,
+				size_t buflen)
+{
+	u16 crc;
+
+	crc = crc16(0, buffer, buflen);
+	if (crc != 0) {
+		dev_warn_ratelimited(&applespi->spi->dev,
+				     "Received corrupted packet (crc mismatch)\n");
+		return false;
+	}
+
+	return true;
+}
+
 static void applespi_got_data(struct applespi_data *applespi)
 {
 	struct spi_packet *packet;
 	struct message *message;
 
+	if (!applespi_verify_crc(applespi, applespi->rx_buffer,
+				 APPLESPI_PACKET_SIZE)) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+		if (applespi->drain) {
+			applespi->read_active = false;
+			applespi->write_active = false;
+
+			wake_up_all(&applespi->drain_complete);
+		}
+
+		spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
+		return;
+	}
+
 	packet = (struct spi_packet *)applespi->rx_buffer;
 	message = (struct message *)packet->data;
+
+	if (le16_to_cpu(packet->length) > sizeof(*message) ||
+	    le16_to_cpu(message->length) > sizeof(packet->data) ||
+	    le16_to_cpu(packet->length) !=
+			le16_to_cpu(message->length) + MSG_HEADER_SIZE + 2) {
+		dev_warn_ratelimited(&applespi->spi->dev,
+				     "Received corrupted packet (invalid length)\n");
+		goto cleanup;
+	}
+
+	if (!applespi_verify_crc(applespi, (u8 *)message, packet->length))
+		goto cleanup;
 
 	if (packet->flags == PACKET_TYPE_READ &&
 	    packet->device == PACKET_DEV_KEYB) {
@@ -1336,6 +1381,7 @@ static void applespi_got_data(struct applespi_data *applespi)
 				   APPLESPI_PACKET_SIZE);
 	}
 
+cleanup:
 	/*
 	 * Note: this relies on the fact that we are blocking the processing of
 	 * spi messages at this point, i.e. that no further transfers or cs
