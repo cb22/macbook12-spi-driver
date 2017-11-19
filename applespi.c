@@ -707,14 +707,25 @@ static int applespi_enable_spi(struct applespi_data *applespi)
 
 static int applespi_send_cmd_msg(struct applespi_data *applespi);
 
-static void applespi_cmd_msg_complete(struct applespi_data *applespi)
+static void applespi_msg_complete(struct applespi_data *applespi,
+				  bool is_write_msg, bool is_read_compl)
 {
 	unsigned long flags;
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
-	applespi->cmd_msg_queued = false;
-	applespi_send_cmd_msg(applespi);
+	if (is_read_compl)
+		applespi->read_active = false;
+	if (is_write_msg)
+		applespi->write_active = false;
+
+	if (applespi->drain && !applespi->write_active)
+		wake_up_all(&applespi->drain_complete);
+
+	if (is_write_msg) {
+		applespi->cmd_msg_queued = false;
+		applespi_send_cmd_msg(applespi);
+	}
 
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 }
@@ -735,7 +746,7 @@ static void applespi_async_write_complete(void *context)
 		 * If we got an error, we presumably won't get the expected
 		 * response message either.
 		 */
-		applespi_cmd_msg_complete(applespi);
+		applespi_msg_complete(applespi, true, false);
 }
 
 static int applespi_send_cmd_msg(struct applespi_data *applespi)
@@ -1112,7 +1123,6 @@ static void applespi_handle_cmd_response(struct applespi_data *applespi,
 static void applespi_got_data(struct applespi_data *applespi)
 {
 	struct keyboard_protocol *keyboard_protocol;
-	unsigned long flags;
 
 	keyboard_protocol = (struct keyboard_protocol *)applespi->rx_buffer;
 	if (keyboard_protocol->packet_type == PACKET_TYPE_READ &&
@@ -1156,21 +1166,10 @@ static void applespi_got_data(struct applespi_data *applespi)
 	 */
 	udelay(SPI_RW_CHG_DLY);
 
-	/* handle draining */
-	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
-
-	applespi->read_active = false;
-	if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE)
-		applespi->write_active = false;
-
-	if (applespi->drain && !applespi->write_active)
-		wake_up_all(&applespi->drain_complete);
-
-	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
-
-	/* notify write complete */
-	if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE)
-		applespi_cmd_msg_complete(applespi);
+	/* clean up */
+	applespi_msg_complete(applespi,
+			      keyboard_protocol->packet_type == PACKET_TYPE_WRITE,
+			      true);
 }
 
 static void applespi_async_read_complete(void *context)
