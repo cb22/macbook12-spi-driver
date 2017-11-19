@@ -731,6 +731,10 @@ static void applespi_async_write_complete(void *context)
 			   applespi->tx_status, APPLESPI_STATUS_SIZE);
 
 	if (!applespi_check_write_status(applespi, applespi->wr_m.status))
+		/*
+		 * If we got an error, we presumably won't get the expected
+		 * response message either.
+		 */
 		applespi_cmd_msg_complete(applespi);
 }
 
@@ -863,6 +867,11 @@ static void applespi_set_bl_level(struct led_classdev *led_cdev,
 	if (value == 0)
 		applespi->want_bl_level = value;
 	else
+		/*
+		 * The backlight does not turn on till level 32, so we scale
+		 * the range here so that from a user's perspective it turns
+		 * on at 1.
+		 */
 		applespi->want_bl_level = (unsigned int)
 			((value * KBD_BL_LEVEL_ADJ) / KBD_BL_LEVEL_SCALE +
 			 MIN_KBD_BL_LEVEL);
@@ -1028,6 +1037,7 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 	unsigned int key;
 	bool still_pressed;
 
+	/* check released keys */
 	for (i = 0; i < MAX_ROLLOVER; i++) {
 		still_pressed = false;
 		for (j = 0; j < MAX_ROLLOVER; j++) {
@@ -1047,6 +1057,7 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 		}
 	}
 
+	/* check pressed keys */
 	for (i = 0; i < MAX_ROLLOVER; i++) {
 		if (keyboard_protocol->keys_pressed[i] <
 				ARRAY_SIZE(applespi_scancodes) &&
@@ -1082,6 +1093,7 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 	}
 	applespi->last_fn_pressed = keyboard_protocol->fn_pressed;
 
+	/* done */
 	input_sync(applespi->keyboard_input_dev);
 	memcpy(&applespi->last_keys_pressed, keyboard_protocol->keys_pressed,
 	       sizeof(applespi->last_keys_pressed));
