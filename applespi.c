@@ -23,6 +23,23 @@
  *   argument 1, then once more with argument 0.
  *
  * UIEN and UIST are only provided on the MacBookPro12,1.
+ *
+ * SPI-based Protocol
+ * ------------------
+ *
+ * The device and driver exchange messages (struct message); each message is
+ * encapsulated in one or more packets (struct spi_packet). There are two types
+ * of exchanges: reads, and writes. A read is signaled by a GPE, upon which one
+ * message can be read from the device. A write exchange consists of writing a
+ * command message, immediately reading a short status packet, and then, upon
+ * receiving a GPE, reading the response messsage. Write exchanges cannot be
+ * interleaved, i.e. a new write exchange must not be started till the previous
+ * write exchange is complete. Whether a received message is part of a read or
+ * write exchange is indicated in the encapsulating packet's flags field.
+ *
+ * A single message may be too large to fit in a single packet (which has a
+ * fixed, 256-byte size). In that case it will be split over multiple,
+ * consecutive packets.
  */
 
 #define pr_fmt(fmt) "applespi: " fmt
@@ -116,55 +133,206 @@ static int touchpad_dimensions[4];
 module_param_array(touchpad_dimensions, int, NULL, 0444);
 MODULE_PARM_DESC(touchpad_dimensions, "The pixel dimensions of the touchpad, as x_min,x_max,y_min,y_max .");
 
+/**
+ * struct keyboard_protocol - keyboard message.
+ * message.type = 0x0110, message.length = 0x000a
+ *
+ * @unknown1:		unknown
+ * @modifiers:		bit-set of modifier/control keys pressed
+ * @unknown2:		unknown
+ * @keys_pressed:	the (non-modifier) keys currently pressed
+ * @fn_pressed:		whether the fn key is currently pressed
+ * @crc_16:		crc over the whole message struct (message header +
+ *			this struct) minus this @crc_16 field
+ */
 struct keyboard_protocol {
-	u8		packet_type;
-	u8		device;
-	u8		unknown1[9];
-	u8		counter;
-	u8		unknown2[5];
-	u8		modifiers;
-	u8		unknown3;
-	u8		keys_pressed[MAX_ROLLOVER];
-	u8		fn_pressed;
-	u16		crc_16;
-	u8		unused[228];
+	__u8			unknown1;
+	__u8			modifiers;
+	__u8			unknown2;
+	__u8			keys_pressed[MAX_ROLLOVER];
+	__u8			fn_pressed;
+	__le16			crc_16;
 };
 
-/* trackpad finger structure, le16-aligned */
+/**
+ * struct tp_finger - single trackpad finger structure, le16-aligned
+ *
+ * @origin:		zero when switching track finger
+ * @abs_x:		absolute x coodinate
+ * @abs_y:		absolute y coodinate
+ * @rel_x:		relative x coodinate
+ * @rel_y:		relative y coodinate
+ * @tool_major:		tool area, major axis
+ * @tool_minor:		tool area, minor axis
+ * @orientation:	16384 when point, else 15 bit angle
+ * @touch_major:	touch area, major axis
+ * @touch_minor:	touch area, minor axis
+ * @unused:		zeros
+ * @pressure:		pressure on forcetouch touchpad
+ * @multi:		one finger: varies, more fingers: constant
+ * @crc_16:		on last finger: crc over the whole message struct
+ *			(i.e. message header + this struct) minus the last
+ *			@crc_16 field; unknown on all other fingers.
+ */
 struct tp_finger {
-	__le16 origin;          /* zero when switching track finger */
-	__le16 abs_x;           /* absolute x coodinate */
-	__le16 abs_y;           /* absolute y coodinate */
-	__le16 rel_x;           /* relative x coodinate */
-	__le16 rel_y;           /* relative y coodinate */
-	__le16 tool_major;      /* tool area, major axis */
-	__le16 tool_minor;      /* tool area, minor axis */
-	__le16 orientation;     /* 16384 when point, else 15 bit angle */
-	__le16 touch_major;     /* touch area, major axis */
-	__le16 touch_minor;     /* touch area, minor axis */
-	__le16 unused[2];       /* zeros */
-	__le16 pressure;        /* pressure on forcetouch touchpad */
-	__le16 multi;           /* one finger: varies, more fingers: constant */
-	__le16 padding;
+	__le16 origin;
+	__le16 abs_x;
+	__le16 abs_y;
+	__le16 rel_x;
+	__le16 rel_y;
+	__le16 tool_major;
+	__le16 tool_minor;
+	__le16 orientation;
+	__le16 touch_major;
+	__le16 touch_minor;
+	__le16 unused[2];
+	__le16 pressure;
+	__le16 multi;
+	__le16 crc_16;
+};
+
+/**
+ * struct touchpad_protocol - touchpad message.
+ * message.type = 0x0210
+ *
+ * @unknown1:		unknown
+ * @clicked:		1 if a button-click was detected, 0 otherwise
+ * @unknown2:		unknown
+ * @number_of_fingers:	the number of fingers being reported in @fingers
+ * @clicked2:		same as @clicked
+ * @unknown3:		unknown
+ * @fingers:		the data for each finger
+ */
+struct touchpad_protocol {
+	__u8			unknown1[1];
+	__u8			clicked;
+	__u8			unknown2[28];
+	__u8			number_of_fingers;
+	__u8			clicked2;
+	__u8			unknown3[16];
+	struct tp_finger	fingers[0];
+};
+
+/**
+ * struct command_protocol_init - initialize touchpad.
+ * message.type = 0x0252, message.length = 0x0002
+ *
+ * @cmd:		value: 0x0102
+ * @crc_16:		crc over the whole message struct (message header +
+ *			this struct) minus this @crc_16 field
+ */
+struct command_protocol_init {
+	__le16			cmd;
+	__le16			crc_16;
+};
+
+/**
+ * struct command_protocol_capsl - toggle caps-lock led
+ * message.type = 0x0151, message.length = 0x0002
+ *
+ * @unknown:		value: 0x01 (length?)
+ * @led:		0 off, 2 on
+ * @crc_16:		crc over the whole message struct (message header +
+ *			this struct) minus this @crc_16 field
+ */
+struct command_protocol_capsl {
+	__u8			unknown;
+	__u8			led;
+	__le16			crc_16;
+};
+
+/**
+ * struct command_protocol_bl - set keyboard backlight brightness
+ * message.type = 0xB051, message.length = 0x0006
+ *
+ * @const1:		value: 0x01B0
+ * @level:		the brightness level to set
+ * @const2:		value: 0x0001 (backlight off), 0x01F4 (backlight on)
+ * @crc_16:		crc over the whole message struct (message header +
+ *			this struct) minus this @crc_16 field
+ */
+struct command_protocol_bl {
+	__le16			const1;
+	__le16			level;
+	__le16			const2;
+	__le16			crc_16;
+};
+
+/**
+ * struct message - a complete spi message.
+ *
+ * Each message begins with fixed header, followed by a message-type specific
+ * payload, and ends with a 16-bit crc. Because of the varying lengths of the
+ * payload, the crc is defined at the end of each payload struct, rather than
+ * in this struct.
+ *
+ * @type:	the message type
+ * @zero:	always 0
+ * @counter:	incremented on each message, rolls over after 255; there is a
+ *		separate counter for each message type.
+ * @rsp_buf_len:response buffer length (the exact nature of this field is quite
+ *		speculative). On a request/write this is often the same as
+ *		@length, though in some cases it has been seen to be much larger
+ *		(e.g. 0x400); on a response/read this the same as on the
+ *		request; for reads that are not responses it is 0.
+ * @length:	length of the remainder of the data in the whole message
+ *		structure (after re-assembly in case of being split over
+ *		multiple spi-packets), minus the trailing crc. The total size
+ *		of the message struct is therefore @length + 10.
+ */
+struct message {
+	__le16		type;
+	__u8		zero;
+	__u8		counter;
+	__le16		rsp_buf_len;
+	__le16		length;
+	union {
+		struct keyboard_protocol	keyboard;
+		struct touchpad_protocol	touchpad;
+		struct command_protocol_init	init_command;
+		struct command_protocol_capsl	capsl_command;
+		struct command_protocol_bl	bl_command;
+		__u8				data[0];
+	};
 } __packed __aligned(2);
 
-struct touchpad_protocol {
-	u8			packet_type;
-	u8			device;
-	u8			unknown1[4];
-	u8			number_of_fingers;
-	u8			unknown2[4];
-	u8			counter;
-	u8			unknown3[2];
-	u8			number_of_fingers2;
-	u8			unknown[2];
-	u8			clicked;
-	u8			rel_x;
-	u8			rel_y;
-	u8			unknown4[44];
-	struct tp_finger	fingers[MAX_FINGERS];
-	u8			unknown5[208];
-};
+/* type + zero + counter + rsp_buf_len + length */
+#define MSG_HEADER_SIZE	8
+
+/**
+ * struct spi_packet - a complete spi packet; always 256 bytes. This carries
+ * the (parts of the) message in the data. But note that this does not
+ * necessarily contain a complete message, as in some cases (e.g. many
+ * fingers pressed) the message is split over multiple packets (see the
+ * @offset, @remaining, and @length fields). In general the data parts in
+ * spi_packet's are concatenated until @remaining is 0, and the result is an
+ * message.
+ *
+ * @flags:	0x40 = write (to device), 0x20 = read (from device); note that
+ *		the response to a write still has 0x40.
+ * @device:	1 = keyboard, 2 = touchpad
+ * @offset:	specifies the offset of this packet's data in the complete
+ *		message; i.e. > 0 indicates this is a continuation packet (in
+ *		the second packet for a message split over multiple packets
+ *		this would then be the same as the @length in the first packet)
+ * @remaining:	number of message bytes remaining in subsequents packets (in
+ *		the first packet of a message split over two packets this would
+ *		then be the same as the @length in the second packet)
+ * @length:	length of the valid data in the @data in this packet
+ * @data:	all or part of a message
+ * @crc_16:	crc over this whole structure minus this @crc_16 field. This
+ *		covers just this packet, even on multi-packet messages (in
+ *		contrast to the crc in the message).
+ */
+struct spi_packet {
+	__u8			flags;
+	__u8			device;
+	__le16			offset;
+	__le16			remaining;
+	__le16			length;
+	__u8			data[246];
+	__le16			crc_16;
+} __packed __aligned(2);
 
 struct spi_settings {
 #ifdef PRE_SPI_PROPERTIES
@@ -1115,47 +1283,52 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 }
 
 static void applespi_handle_cmd_response(struct applespi_data *applespi,
-					 struct keyboard_protocol
-							*keyboard_protocol)
+					 struct spi_packet *packet,
+					 struct message *message)
 {
-	if (keyboard_protocol->device == PACKET_DEV_TPAD &&
-	    memcmp(((u8 *)keyboard_protocol) + 8,
-		   applespi_init_commands[0] + 8, 4) == 0)
+	if (packet->device == PACKET_DEV_TPAD &&
+	    memcmp(message, applespi_init_commands[0] + 8, 4) == 0)
 		pr_info("modeswitch done.\n");
 }
 
 static void applespi_got_data(struct applespi_data *applespi)
 {
-	struct keyboard_protocol *keyboard_protocol;
+	struct spi_packet *packet;
+	struct message *message;
 
-	keyboard_protocol = (struct keyboard_protocol *)applespi->rx_buffer;
-	if (keyboard_protocol->packet_type == PACKET_TYPE_READ &&
-	    keyboard_protocol->device == PACKET_DEV_KEYB) {
+	packet = (struct spi_packet *)applespi->rx_buffer;
+	message = (struct message *)packet->data;
+
+	if (packet->flags == PACKET_TYPE_READ &&
+	    packet->device == PACKET_DEV_KEYB) {
+		struct keyboard_protocol *keyboard = &message->keyboard;
+
 		debug_print(DBG_RD_KEYB, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_KEYB));
 		debug_print_buffer(DBG_RD_KEYB, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 
-		applespi_handle_keyboard_event(applespi, keyboard_protocol);
+		applespi_handle_keyboard_event(applespi, keyboard);
 
-	} else if (keyboard_protocol->packet_type == PACKET_TYPE_READ &&
-		   keyboard_protocol->device == PACKET_DEV_TPAD) {
+	} else if (packet->flags == PACKET_TYPE_READ &&
+		   packet->device == PACKET_DEV_TPAD) {
+		struct touchpad_protocol *touchpad = &message->touchpad;
+
 		debug_print(DBG_RD_TPAD, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_TPAD));
 		debug_print_buffer(DBG_RD_TPAD, "read   ", applespi->rx_buffer,
 				   APPLESPI_PACKET_SIZE);
 
-		report_tp_state(applespi,
-				(struct touchpad_protocol *)keyboard_protocol);
+		report_tp_state(applespi, touchpad);
 
-	} else if (keyboard_protocol->packet_type == PACKET_TYPE_WRITE) {
+	} else if (packet->flags == PACKET_TYPE_WRITE) {
 		debug_print(applespi->cmd_log_mask,
 			    "--- %s ---------------------------\n",
 			    applespi_debug_facility(applespi->cmd_log_mask));
 		debug_print_buffer(applespi->cmd_log_mask, "read   ",
 				   applespi->rx_buffer, APPLESPI_PACKET_SIZE);
 
-		applespi_handle_cmd_response(applespi, keyboard_protocol);
+		applespi_handle_cmd_response(applespi, packet, message);
 	} else {
 		debug_print(DBG_RD_UNKN, "--- %s ---------------------------\n",
 			    applespi_debug_facility(DBG_RD_UNKN));
@@ -1171,8 +1344,7 @@ static void applespi_got_data(struct applespi_data *applespi)
 	udelay(SPI_RW_CHG_DLY);
 
 	/* clean up */
-	applespi_msg_complete(applespi,
-			      keyboard_protocol->packet_type == PACKET_TYPE_WRITE,
+	applespi_msg_complete(applespi, packet->flags == PACKET_TYPE_WRITE,
 			      true);
 }
 
