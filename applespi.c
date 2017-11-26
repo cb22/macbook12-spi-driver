@@ -112,6 +112,10 @@ static unsigned int debug;
 module_param(debug, uint, 0644);
 MODULE_PARM_DESC(debug, "Enable/Disable debug logging. This is a bitmask.");
 
+static int touchpad_dimensions[4];
+module_param_array(touchpad_dimensions, int, NULL, 0444);
+MODULE_PARM_DESC(touchpad_dimensions, "The pixel dimensions of the touchpad, as x_min,x_max,y_min,y_max .");
+
 struct keyboard_protocol {
 	u8		packet_type;
 	u8		device;
@@ -192,7 +196,7 @@ struct applespi_data {
 	u8				*tx_status;
 	u8				*rx_buffer;
 
-	const struct applespi_tp_info	*tp_info;
+	struct applespi_tp_info		tp_info;
 
 	u8				last_keys_pressed[MAX_ROLLOVER];
 	u8				last_keys_fn_pressed[MAX_ROLLOVER];
@@ -944,7 +948,7 @@ static int report_tp_state(struct applespi_data *applespi,
 
 	const struct tp_finger *f;
 	struct input_dev *input = applespi->touchpad_input_dev;
-	const struct applespi_tp_info *tp_info = applespi->tp_info;
+	const struct applespi_tp_info *tp_info = &applespi->tp_info;
 	int i, n;
 
 	n = 0;
@@ -1269,8 +1273,21 @@ static int applespi_probe(struct spi_device *spi)
 		return result;
 
 	/* set up touchpad dimensions */
-	applespi->tp_info =
+	applespi->tp_info = *(struct applespi_tp_info *)
 			dmi_first_match(applespi_touchpad_infos)->driver_data;
+
+	if (touchpad_dimensions[0] || touchpad_dimensions[1] ||
+	    touchpad_dimensions[2] || touchpad_dimensions[3]) {
+		applespi->tp_info.x_min = touchpad_dimensions[0];
+		applespi->tp_info.x_max = touchpad_dimensions[1];
+		applespi->tp_info.y_min = touchpad_dimensions[2];
+		applespi->tp_info.y_max = touchpad_dimensions[3];
+	} else {
+		touchpad_dimensions[0] = applespi->tp_info.x_min;
+		touchpad_dimensions[1] = applespi->tp_info.x_max;
+		touchpad_dimensions[2] = applespi->tp_info.y_min;
+		touchpad_dimensions[3] = applespi->tp_info.y_max;
+	}
 
 	/* setup the keyboard input dev */
 	applespi->keyboard_input_dev = devm_input_allocate_device(&spi->dev);
@@ -1350,10 +1367,10 @@ static int applespi_probe(struct spi_device *spi)
 
 	/* finger position */
 	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_X,
-			     applespi->tp_info->x_min, applespi->tp_info->x_max,
+			     applespi->tp_info.x_min, applespi->tp_info.x_max,
 			     0, 0);
 	input_set_abs_params(applespi->touchpad_input_dev, ABS_MT_POSITION_Y,
-			     applespi->tp_info->y_min, applespi->tp_info->y_max,
+			     applespi->tp_info.y_min, applespi->tp_info.y_max,
 			     0, 0);
 
 	input_set_capability(applespi->touchpad_input_dev, EV_KEY,
