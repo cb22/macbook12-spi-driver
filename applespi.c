@@ -82,8 +82,9 @@
 #define MAX_ROLLOVER		6
 #define MAX_MODIFIERS		8
 
-#define MAX_FINGERS		6
+#define MAX_FINGERS		11
 #define MAX_FINGER_ORIENTATION	16384
+#define MAX_PKTS_PER_MSG	2
 
 #define MIN_KBD_BL_LEVEL	32
 #define MAX_KBD_BL_LEVEL	255
@@ -363,6 +364,9 @@ struct applespi_data {
 	u8				*tx_buffer;
 	u8				*tx_status;
 	u8				*rx_buffer;
+
+	u8				*msg_buf;
+	unsigned int			saved_msg_len;
 
 	struct applespi_tp_info		tp_info;
 
@@ -1081,7 +1085,7 @@ static int report_tp_state(struct applespi_data *applespi,
 
 	n = 0;
 
-	for (i = 0; i < MAX_FINGERS; i++) {
+	for (i = 0; i < t->number_of_fingers; i++) {
 		f = &t->fingers[i];
 		if (raw2int(f->touch_major) == 0)
 			continue;
@@ -1274,11 +1278,42 @@ static bool applespi_verify_crc(struct applespi_data *applespi, u8 *buffer,
 	return true;
 }
 
+static void applespi_debug_print_read_packet(struct applespi_data *applespi,
+					     struct spi_packet *packet)
+{
+	unsigned int dbg_mask;
+
+	if (packet->flags == PACKET_TYPE_READ &&
+	    packet->device == PACKET_DEV_KEYB) {
+		dbg_mask = DBG_RD_KEYB;
+
+	} else if (packet->flags == PACKET_TYPE_READ &&
+		   packet->device == PACKET_DEV_TPAD) {
+		dbg_mask = DBG_RD_TPAD;
+
+	} else if (packet->flags == PACKET_TYPE_WRITE) {
+		dbg_mask = applespi->cmd_log_mask;
+
+	} else {
+		dbg_mask = DBG_RD_UNKN;
+	}
+
+	debug_print(dbg_mask, "--- %s ---------------------------\n",
+		    applespi_debug_facility(dbg_mask));
+	debug_print_buffer(dbg_mask, "read   ", applespi->rx_buffer,
+			   APPLESPI_PACKET_SIZE);
+}
+
 static void applespi_got_data(struct applespi_data *applespi)
 {
 	struct spi_packet *packet;
 	struct message *message;
+	unsigned int msg_len;
+	unsigned int off;
+	unsigned int rem;
+	unsigned int len;
 
+	/* process packet header */
 	if (!applespi_verify_crc(applespi, applespi->rx_buffer,
 				 APPLESPI_PACKET_SIZE)) {
 		unsigned long flags;
@@ -1298,55 +1333,96 @@ static void applespi_got_data(struct applespi_data *applespi)
 	}
 
 	packet = (struct spi_packet *)applespi->rx_buffer;
-	message = (struct message *)packet->data;
 
-	if (le16_to_cpu(packet->length) > sizeof(*message) ||
-	    le16_to_cpu(message->length) > sizeof(packet->data) ||
-	    le16_to_cpu(packet->length) !=
-			le16_to_cpu(message->length) + MSG_HEADER_SIZE + 2) {
+	applespi_debug_print_read_packet(applespi, packet);
+
+	off = le16_to_cpu(packet->offset);
+	rem = le16_to_cpu(packet->remaining);
+	len = le16_to_cpu(packet->length);
+
+	if (len > sizeof(packet->data)) {
 		dev_warn_ratelimited(&applespi->spi->dev,
-				     "Received corrupted packet (invalid length)\n");
+				     "Received corrupted packet (invalid packet length)\n");
 		goto cleanup;
 	}
 
-	if (!applespi_verify_crc(applespi, (u8 *)message, packet->length))
+	/* handle multi-packet messages */
+	if (rem > 0 || off > 0) {
+		if (off != applespi->saved_msg_len) {
+			dev_warn_ratelimited(&applespi->spi->dev,
+					     "Received unexpected offset (got %u, expected %u)\n",
+					     off, applespi->saved_msg_len);
+			goto cleanup;
+		}
+
+		if (off + rem > MAX_PKTS_PER_MSG * APPLESPI_PACKET_SIZE) {
+			dev_warn_ratelimited(&applespi->spi->dev,
+					     "Received message too large (size %u)\n",
+					     off + rem);
+			goto cleanup;
+		}
+
+		if (off + len > MAX_PKTS_PER_MSG * APPLESPI_PACKET_SIZE) {
+			dev_warn_ratelimited(&applespi->spi->dev,
+					     "Received message too large (size %u)\n",
+					     off + len);
+			goto cleanup;
+		}
+
+		memcpy(applespi->msg_buf + off, &packet->data, len);
+		applespi->saved_msg_len += len;
+
+		if (rem > 0)
+			return;
+
+		message = (struct message *)applespi->msg_buf;
+		msg_len = applespi->saved_msg_len;
+	} else {
+		message = (struct message *)&packet->data;
+		msg_len = len;
+	}
+
+	applespi->saved_msg_len = 0;
+
+	/* got complete message - verify */
+	if (le16_to_cpu(message->length) != msg_len - MSG_HEADER_SIZE - 2) {
+		dev_warn_ratelimited(&applespi->spi->dev,
+				     "Received corrupted packet (invalid message length)\n");
+		goto cleanup;
+	}
+
+	if (!applespi_verify_crc(applespi, (u8 *)message, msg_len))
 		goto cleanup;
 
+	/* handle message */
 	if (packet->flags == PACKET_TYPE_READ &&
 	    packet->device == PACKET_DEV_KEYB) {
-		struct keyboard_protocol *keyboard = &message->keyboard;
-
-		debug_print(DBG_RD_KEYB, "--- %s ---------------------------\n",
-			    applespi_debug_facility(DBG_RD_KEYB));
-		debug_print_buffer(DBG_RD_KEYB, "read   ", applespi->rx_buffer,
-				   APPLESPI_PACKET_SIZE);
-
-		applespi_handle_keyboard_event(applespi, keyboard);
+		applespi_handle_keyboard_event(applespi, &message->keyboard);
 
 	} else if (packet->flags == PACKET_TYPE_READ &&
 		   packet->device == PACKET_DEV_TPAD) {
-		struct touchpad_protocol *touchpad = &message->touchpad;
+		struct touchpad_protocol *tp = &message->touchpad;
 
-		debug_print(DBG_RD_TPAD, "--- %s ---------------------------\n",
-			    applespi_debug_facility(DBG_RD_TPAD));
-		debug_print_buffer(DBG_RD_TPAD, "read   ", applespi->rx_buffer,
-				   APPLESPI_PACKET_SIZE);
+		size_t tp_len = sizeof(*tp) +
+				tp->number_of_fingers * sizeof(tp->fingers[0]);
+		if (le16_to_cpu(message->length) + 2 != tp_len) {
+			dev_warn_ratelimited(&applespi->spi->dev,
+					     "Received corrupted packet (invalid message length)\n");
+			goto cleanup;
+		}
 
-		report_tp_state(applespi, touchpad);
+		if (tp->number_of_fingers > MAX_FINGERS) {
+			dev_warn_ratelimited(&applespi->spi->dev,
+					     "Number of reported fingers (%u) exceeds max (%u))\n",
+					     tp->number_of_fingers,
+					     MAX_FINGERS);
+			tp->number_of_fingers = MAX_FINGERS;
+		}
+
+		report_tp_state(applespi, tp);
 
 	} else if (packet->flags == PACKET_TYPE_WRITE) {
-		debug_print(applespi->cmd_log_mask,
-			    "--- %s ---------------------------\n",
-			    applespi_debug_facility(applespi->cmd_log_mask));
-		debug_print_buffer(applespi->cmd_log_mask, "read   ",
-				   applespi->rx_buffer, APPLESPI_PACKET_SIZE);
-
 		applespi_handle_cmd_response(applespi, packet, message);
-	} else {
-		debug_print(DBG_RD_UNKN, "--- %s ---------------------------\n",
-			    applespi_debug_facility(DBG_RD_UNKN));
-		debug_print_buffer(DBG_RD_UNKN, "read   ", applespi->rx_buffer,
-				   APPLESPI_PACKET_SIZE);
 	}
 
 cleanup:
@@ -1431,6 +1507,9 @@ static int applespi_probe(struct spi_device *spi)
 					   GFP_KERNEL);
 	applespi->rx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE,
 					   GFP_KERNEL);
+	applespi->msg_buf = devm_kmalloc(&spi->dev, MAX_PKTS_PER_MSG *
+						    APPLESPI_PACKET_SIZE,
+					 GFP_KERNEL);
 
 	if (!applespi->tx_buffer || !applespi->tx_status ||
 	    !applespi->rx_buffer)
