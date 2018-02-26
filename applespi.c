@@ -32,7 +32,7 @@
  * of exchanges: reads, and writes. A read is signaled by a GPE, upon which one
  * message can be read from the device. A write exchange consists of writing a
  * command message, immediately reading a short status packet, and then, upon
- * receiving a GPE, reading the response messsage. Write exchanges cannot be
+ * receiving a GPE, reading the response message. Write exchanges cannot be
  * interleaved, i.e. a new write exchange must not be started till the previous
  * write exchange is complete. Whether a received message is part of a read or
  * write exchange is indicated in the encapsulating packet's flags field.
