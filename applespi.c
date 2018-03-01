@@ -1183,6 +1183,20 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 	int i, j;
 	unsigned int key;
 	bool still_pressed;
+	bool is_overflow;
+
+	/* check for rollover overflow, which is signalled by all keys == 1 */
+	is_overflow = true;
+
+	for (i = 0; i < MAX_ROLLOVER; i++) {
+		if (keyboard_protocol->keys_pressed[i] != 1) {
+			is_overflow = false;
+			break;
+		}
+	}
+
+	if (is_overflow)
+		return;
 
 	/* check released keys */
 	for (i = 0; i < MAX_ROLLOVER; i++) {
