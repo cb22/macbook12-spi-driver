@@ -1385,14 +1385,14 @@ static void applespi_got_data(struct applespi_data *applespi)
 	applespi->saved_msg_len = 0;
 
 	/* got complete message - verify */
+	if (!applespi_verify_crc(applespi, (u8 *)message, msg_len))
+		goto cleanup;
+
 	if (le16_to_cpu(message->length) != msg_len - MSG_HEADER_SIZE - 2) {
 		dev_warn_ratelimited(&applespi->spi->dev,
 				     "Received corrupted packet (invalid message length)\n");
 		goto cleanup;
 	}
-
-	if (!applespi_verify_crc(applespi, (u8 *)message, msg_len))
-		goto cleanup;
 
 	/* handle message */
 	if (packet->flags == PACKET_TYPE_READ &&
