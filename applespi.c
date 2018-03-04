@@ -1750,7 +1750,6 @@ static int applespi_remove(struct spi_device *spi)
 	return 0;
 }
 
-#ifdef CONFIG_PM
 static int applespi_suspend(struct device *dev)
 {
 	struct spi_device *spi = to_spi_device(dev);
@@ -1817,7 +1816,6 @@ static int applespi_resume(struct device *dev)
 
 	return 0;
 }
-#endif
 
 static const struct acpi_device_id applespi_acpi_match[] = {
 	{ "APP000D", 0 },
@@ -1825,8 +1823,7 @@ static const struct acpi_device_id applespi_acpi_match[] = {
 };
 MODULE_DEVICE_TABLE(acpi, applespi_acpi_match);
 
-static UNIVERSAL_DEV_PM_OPS(applespi_pm_ops, applespi_suspend,
-			    applespi_resume, NULL);
+static SIMPLE_DEV_PM_OPS(applespi_pm_ops, applespi_suspend, applespi_resume);
 
 static struct spi_driver applespi_driver = {
 	.driver		= {
