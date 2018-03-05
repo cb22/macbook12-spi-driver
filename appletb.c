@@ -786,11 +786,29 @@ static int appletb_input_configured(struct hid_device *hdev,
 				    struct hid_input *hidinput)
 {
 	int idx;
+	struct input_dev *input = hidinput->input;
+	#define CLEAR_ARRAY(array) \
+		memset(array, 0, sizeof(array))
 
-	/* Add the translated keys to the keybits */
-	for (idx = 0; idx < ARRAY_SIZE(appletb_fn_codes); idx++)
-		input_set_capability(hidinput->input, EV_KEY,
-				     appletb_fn_codes[idx].to);
+	/*
+	 * Clear various input capabilities that are blindly set by the hid
+	 * driver (usbkbd.c)
+	 */
+	CLEAR_ARRAY(input->evbit);
+	CLEAR_ARRAY(input->keybit);
+	CLEAR_ARRAY(input->ledbit);
+
+	/* set our actual capabilities */
+	__set_bit(EV_KEY, input->evbit);
+	__set_bit(EV_REP, input->evbit);
+	__set_bit(EV_MSC, input->evbit);  /* hid-input generates MSC_SCAN */
+
+	for (idx = 0; idx < ARRAY_SIZE(appletb_fn_codes); idx++) {
+		input_set_capability(input, EV_KEY, appletb_fn_codes[idx].from);
+		input_set_capability(input, EV_KEY, appletb_fn_codes[idx].to);
+	}
+	input_set_capability(input, EV_KEY, KEY_ESC);
+	input_set_capability(input, EV_KEY, KEY_UNKNOWN);
 
 	return 0;
 }
