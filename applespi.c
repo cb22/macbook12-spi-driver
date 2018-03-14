@@ -32,7 +32,7 @@
  * of exchanges: reads, and writes. A read is signaled by a GPE, upon which one
  * message can be read from the device. A write exchange consists of writing a
  * command message, immediately reading a short status packet, and then, upon
- * receiving a GPE, reading the response messsage. Write exchanges cannot be
+ * receiving a GPE, reading the response message. Write exchanges cannot be
  * interleaved, i.e. a new write exchange must not be started till the previous
  * write exchange is complete. Whether a received message is part of a read or
  * write exchange is indicated in the encapsulating packet's flags field.
@@ -1399,14 +1399,14 @@ static void applespi_got_data(struct applespi_data *applespi)
 	applespi->saved_msg_len = 0;
 
 	/* got complete message - verify */
+	if (!applespi_verify_crc(applespi, (u8 *)message, msg_len))
+		goto cleanup;
+
 	if (le16_to_cpu(message->length) != msg_len - MSG_HEADER_SIZE - 2) {
 		dev_warn_ratelimited(&applespi->spi->dev,
 				     "Received corrupted packet (invalid message length)\n");
 		goto cleanup;
 	}
-
-	if (!applespi_verify_crc(applespi, (u8 *)message, msg_len))
-		goto cleanup;
 
 	/* handle message */
 	if (packet->flags == PACKET_TYPE_READ &&
