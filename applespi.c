@@ -214,14 +214,14 @@ struct touchpad_protocol {
 };
 
 /**
- * struct command_protocol_init - initialize touchpad.
+ * struct command_protocol_mt_init - initialize multitouch.
  * message.type = 0x0252, message.length = 0x0002
  *
  * @cmd:		value: 0x0102
  * @crc_16:		crc over the whole message struct (message header +
  *			this struct) minus this @crc_16 field
  */
-struct command_protocol_init {
+struct command_protocol_mt_init {
 	__le16			cmd;
 	__le16			crc_16;
 };
@@ -289,7 +289,7 @@ struct message {
 	union {
 		struct keyboard_protocol	keyboard;
 		struct touchpad_protocol	touchpad;
-		struct command_protocol_init	init_command;
+		struct command_protocol_mt_init	init_mt_command;
 		struct command_protocol_capsl	capsl_command;
 		struct command_protocol_bl	bl_command;
 		__u8				data[0];
@@ -388,7 +388,7 @@ struct applespi_data {
 	struct spi_transfer		st_t;
 	struct spi_message		wr_m;
 
-	bool				want_init_cmd;
+	bool				want_mt_init_cmd;
 	bool				want_cl_led_on;
 	bool				have_cl_led_on;
 	unsigned int			want_bl_level;
@@ -890,17 +890,17 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	memset(packet, 0, APPLESPI_PACKET_SIZE);
 
 	/* are we processing init commands? */
-	if (applespi->want_init_cmd) {
-		applespi->want_init_cmd = false;
+	} else if (applespi->want_mt_init_cmd) {
+		applespi->want_mt_init_cmd = false;
 		applespi->cmd_log_mask = DBG_CMD_TP_INI;
 
 		/* build init command */
 		device = PACKET_DEV_TPAD;
 
 		message->type = cpu_to_le16(0x0252);
-		msg_len = sizeof(message->init_command);
+		msg_len = sizeof(message->init_mt_command);
 
-		message->init_command.cmd = cpu_to_le16(0x0102);
+		message->init_mt_command.cmd = cpu_to_le16(0x0102);
 
 	/* do we need caps-lock command? */
 	} else if (applespi->want_cl_led_on != applespi->have_cl_led_on) {
@@ -977,7 +977,7 @@ static void applespi_init(struct applespi_data *applespi)
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
-	applespi->want_init_cmd = true;
+	applespi->want_mt_init_cmd = true;
 	applespi_send_cmd_msg(applespi);
 
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
