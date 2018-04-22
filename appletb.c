@@ -711,7 +711,7 @@ static int appletb_get_tb_usb_dev_info(struct appletb_data *tb_data,
 	iface = to_usb_interface(dev);
 
 	/* extract the info we need from it */
-	tb_data->tb_usb_iface = iface;
+	tb_data->tb_usb_iface = usb_get_intf(iface);
 	tb_data->tb_usb_epnum = 0;
 	tb_data->tb_usb_ifnum = iface->cur_altsetting->desc.bInterfaceNumber;
 
@@ -916,6 +916,7 @@ static int appletb_probe(struct hid_device *hdev,
 	hid_hw_stop(hdev);
  cancel_work:
 	cancel_delayed_work_sync(&tb_data->tb_mode_work);
+	usb_put_intf(tb_data->tb_usb_iface);
  free_mem:
 	kfree(tb_data);
 
@@ -935,6 +936,8 @@ static void appletb_remove(struct hid_device *hdev)
 	cancel_delayed_work_sync(&tb_data->tb_mode_work);
 	appletb_set_tb_mode(tb_data, APPLETB_CMD_MODE_OFF);
 	appletb_set_tb_disp(tb_data, APPLETB_CMD_DISP_ON);
+
+	usb_put_intf(tb_data->tb_usb_iface);
 
 	kfree(tb_data);
 
