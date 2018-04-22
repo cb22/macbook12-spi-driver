@@ -937,6 +937,8 @@ static void appletb_remove(struct hid_device *hdev)
 	appletb_set_tb_mode(tb_data, APPLETB_CMD_MODE_OFF);
 	appletb_set_tb_disp(tb_data, APPLETB_CMD_DISP_ON);
 
+	if (tb_data->tb_autopm_off)
+		usb_autopm_put_interface(tb_data->tb_usb_iface);
 	usb_put_intf(tb_data->tb_usb_iface);
 
 	kfree(tb_data);
