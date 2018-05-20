@@ -125,6 +125,10 @@ static unsigned int fnmode = 1;
 module_param(fnmode, uint, 0644);
 MODULE_PARM_DESC(fnmode, "Mode of fn key on Apple keyboards (0 = disabled, [1] = fkeyslast, 2 = fkeysfirst)");
 
+static unsigned int fnremap;
+module_param(fnremap, uint, 0644);
+MODULE_PARM_DESC(fnremap, "Remap fn key ([0] = no-remap; 1 = left-ctrl, 2 = left-shift, 3 = left-alt, 4 = left-meta, 6 = right-shift, 7 = right-alt, 8 = right-meta)");
+
 static unsigned int iso_layout;
 module_param(iso_layout, uint, 0644);
 MODULE_PARM_DESC(iso_layout, "Enable/Disable hardcoded ISO-layout of the keyboard. ([0] = disabled, 1 = enabled)");
@@ -1178,6 +1182,25 @@ static unsigned int applespi_code_to_key(u8 code, int fn_pressed)
 	return key;
 }
 
+static void applespi_remap_fn_key(struct keyboard_protocol
+							*keyboard_protocol)
+{
+	unsigned char tmp;
+	unsigned long *modifiers = (unsigned long *)
+						&keyboard_protocol->modifiers;
+
+	if (!fnremap || fnremap > ARRAY_SIZE(applespi_controlcodes) ||
+	    !applespi_controlcodes[fnremap - 1])
+		return;
+
+	tmp = keyboard_protocol->fn_pressed;
+	keyboard_protocol->fn_pressed = test_bit(fnremap - 1, modifiers);
+	if (tmp)
+		__set_bit(fnremap - 1, modifiers);
+	else
+		__clear_bit(fnremap - 1, modifiers);
+}
+
 static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 					   struct keyboard_protocol
 							*keyboard_protocol)
@@ -1199,6 +1222,9 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 
 	if (is_overflow)
 		return;
+
+	/* remap fn key if desired */
+	applespi_remap_fn_key(keyboard_protocol);
 
 	/* check released keys */
 	for (i = 0; i < MAX_ROLLOVER; i++) {
