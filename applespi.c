@@ -294,7 +294,7 @@ struct message {
 		struct command_protocol_bl	bl_command;
 		__u8				data[0];
 	};
-} __packed __aligned(2);
+};
 
 /* type + zero + counter + rsp_buf_len + length */
 #define MSG_HEADER_SIZE	8
@@ -332,7 +332,7 @@ struct spi_packet {
 	__le16			length;
 	__u8			data[246];
 	__le16			crc_16;
-} __packed __aligned(2);
+};
 
 struct spi_settings {
 #ifdef PRE_SPI_PROPERTIES
