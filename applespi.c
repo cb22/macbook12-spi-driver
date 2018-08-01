@@ -7,10 +7,10 @@
  */
 
 /**
- * The keyboard and touchpad controller on the MacBook8,1, MacBook9,1 and
- * MacBookPro12,1 can be driven either by USB or SPI. However the USB pins
- * are only connected on the MacBookPro12,1, all others need this driver.
- * The interface is selected using ACPI methods:
+ * The keyboard and touchpad controller on the MacBook8,1 and newer, and on
+ * MacBookPro12,1 and newer, can be driven either by USB or SPI. However the
+ * USB pins are only connected on the MacBookPro12,1, all others need this
+ * driver. The interface is selected using ACPI methods:
  *
  * * UIEN ("USB Interface Enable"): If invoked with argument 1, disables SPI
  *   and enables USB. If invoked with argument 0, disables USB.
