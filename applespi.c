@@ -425,6 +425,7 @@ struct applespi_data {
 	struct spi_transfer		rd_t;
 	struct spi_message		rd_m;
 
+	struct spi_transfer		ww_t;
 	struct spi_transfer		wd_t;
 	struct spi_transfer		wr_t;
 	struct spi_transfer		st_t;
@@ -584,13 +585,24 @@ static void applespi_setup_read_txfrs(struct applespi_data *applespi)
 static void applespi_setup_write_txfrs(struct applespi_data *applespi)
 {
 	struct spi_message *msg = &applespi->wr_m;
+	struct spi_transfer *wt_t = &applespi->ww_t;
 	struct spi_transfer *dl_t = &applespi->wd_t;
 	struct spi_transfer *wr_t = &applespi->wr_t;
 	struct spi_transfer *st_t = &applespi->st_t;
 
+	memset(wt_t, 0, sizeof(*wt_t));
 	memset(dl_t, 0, sizeof(*dl_t));
 	memset(wr_t, 0, sizeof(*wr_t));
 	memset(st_t, 0, sizeof(*st_t));
+
+	/*
+	 * All we need here is a delay at the beginning of the message before
+	 * asserting cs. But the current spi API doesn't support this, so we
+	 * end up with an extra unnecessary (but harmless) cs assertion and
+	 * deassertion.
+	 */
+	wt_t->delay_usecs = SPI_RW_CHG_DLY;
+	wt_t->cs_change = 1;
 
 	dl_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
 
@@ -602,6 +614,7 @@ static void applespi_setup_write_txfrs(struct applespi_data *applespi)
 	st_t->len = APPLESPI_STATUS_SIZE;
 
 	spi_message_init(msg);
+	spi_message_add_tail(wt_t, msg);
 	spi_message_add_tail(dl_t, msg);
 	spi_message_add_tail(wr_t, msg);
 	spi_message_add_tail(st_t, msg);
@@ -1598,13 +1611,6 @@ static void applespi_got_data(struct applespi_data *applespi)
 	}
 
 cleanup:
-	/*
-	 * Note: this relies on the fact that we are blocking the processing of
-	 * spi messages at this point, i.e. that no further transfers or cs
-	 * changes are processed while we delay here.
-	 */
-	udelay(SPI_RW_CHG_DLY);
-
 	/* clean up */
 	applespi->saved_msg_len = 0;
 
