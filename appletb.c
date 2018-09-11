@@ -29,6 +29,7 @@
 #include <linux/jiffies.h>
 #include <linux/spinlock.h>
 #include <linux/sysfs.h>
+#include <linux/version.h>
 
 #define USB_ID_VENDOR_APPLE	0x05ac
 #define USB_ID_PRODUCT_IBRIDGE	0x8600
@@ -984,10 +985,10 @@ static struct hid_driver appletb_driver = {
 #endif
 };
 
-#ifdef WE_ARE_IN_HID_IGNORE_LIST
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
 module_hid_driver(appletb_driver);
 
-#else /* WE_ARE_IN_HID_IGNORE_LIST */
+#else /* KERNEL_VERSION >= 4.16 */
 /*
  * Hack to work around the fact that it's not possible to dynamically be added
  * to hid-core's hid_ignore_list. This means the hid-generic hid driver will
@@ -1186,7 +1187,7 @@ static void __exit appletb_exit(void)
 module_init(appletb_init);
 module_exit(appletb_exit);
 
-#endif /* WE_ARE_IN_HID_IGNORE_LIST */
+#endif /* KERNEL_VERSION >= 4.16 */
 
 MODULE_AUTHOR("Ronald Tschalär");
 MODULE_DESCRIPTION("MacBookPro touchbar driver");
