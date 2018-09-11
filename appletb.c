@@ -33,6 +33,7 @@
 
 #define USB_ID_VENDOR_APPLE	0x05ac
 #define USB_ID_PRODUCT_IBRIDGE	0x8600
+#define APPLETB_TB_SIMPLE_IFNUM 2
 
 #define MAX_TB_KEYS		13	/* ESC, F1-F12 */
 
@@ -814,6 +815,11 @@ static int appletb_input_configured(struct hid_device *hdev,
 	return 0;
 }
 
+static bool appletb_is_simple_iface(struct appletb_data *tb_data)
+{
+	return (tb_data->tb_usb_ifnum == APPLETB_TB_SIMPLE_IFNUM);
+}
+
 static const struct input_device_id appletb_input_devices[] = {
 	{
 		.flags = INPUT_DEVICE_ID_MATCH_BUS |
@@ -843,6 +849,8 @@ static int appletb_probe(struct hid_device *hdev,
 	if (!tb_data)
 		return -ENOMEM;
 
+	hid_set_drvdata(hdev, tb_data);
+
 	/* Initialize structures */
 	spin_lock_init(&tb_data->tb_mode_lock);
 	INIT_DELAYED_WORK(&tb_data->tb_mode_work, appletb_set_tb_mode_worker);
@@ -853,6 +861,10 @@ static int appletb_probe(struct hid_device *hdev,
 		hid_err(hdev, "Failed to find touchbar device (%d)\n", rc);
 		goto free_mem;
 	}
+
+	/* only interested in simple device */
+	if (!appletb_is_simple_iface(tb_data))
+		return 0;
 
 	/* initialize the touchbar */
 	if (appletb_tb_def_fn_mode >= 0 &&
@@ -870,8 +882,6 @@ static int appletb_probe(struct hid_device *hdev,
 	appletb_update_touchbar(tb_data, false);
 
 	/* Set up the hid */
-	hid_set_drvdata(hdev, tb_data);
-
 	rc = hid_parse(hdev);
 	if (rc) {
 		hid_err(hdev, "hid parse failed (%d)\n", rc);
@@ -928,15 +938,17 @@ static void appletb_remove(struct hid_device *hdev)
 {
 	struct appletb_data *tb_data = hid_get_drvdata(hdev);
 
-	sysfs_remove_group(&hdev->dev.kobj, &appletb_attr_group);
+	if (appletb_is_simple_iface(tb_data)) {
+		sysfs_remove_group(&hdev->dev.kobj, &appletb_attr_group);
 
-	input_unregister_handler(&tb_data->inp_handler);
+		input_unregister_handler(&tb_data->inp_handler);
 
-	hid_hw_stop(hdev);
+		hid_hw_stop(hdev);
 
-	cancel_delayed_work_sync(&tb_data->tb_mode_work);
-	appletb_set_tb_mode(tb_data, APPLETB_CMD_MODE_OFF);
-	appletb_set_tb_disp(tb_data, APPLETB_CMD_DISP_ON);
+		cancel_delayed_work_sync(&tb_data->tb_mode_work);
+		appletb_set_tb_mode(tb_data, APPLETB_CMD_MODE_OFF);
+		appletb_set_tb_disp(tb_data, APPLETB_CMD_DISP_ON);
+	}
 
 	if (tb_data->tb_autopm_off)
 		usb_autopm_put_interface(tb_data->tb_usb_iface);
@@ -952,6 +964,9 @@ static void appletb_remove(struct hid_device *hdev)
 static int appletb_reset_resume(struct hid_device *hdev)
 {
 	struct appletb_data *tb_data = hid_get_drvdata(hdev);
+
+	if (!appletb_is_simple_iface(tb_data))
+		return 0;
 
 	/* restore touchbar state */
 	appletb_set_tb_mode(tb_data, tb_data->cur_tb_mode);
@@ -996,8 +1011,6 @@ module_hid_driver(appletb_driver);
  * the device to appear, release the hid-generic driver (if attached), and
  * trigger our driver instead.
  */
-
-#define APPLETB_TB_SIMPLE_IFNUM 2
 
 static struct {
 	struct work_struct work;
