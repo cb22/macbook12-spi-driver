@@ -616,6 +616,8 @@ static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
 	struct appletb_data *tb_data = hid_get_drvdata(hdev);
 	unsigned long flags;
 	unsigned int new_code = 0;
+	bool send_dummy = false;
+	bool send_trnsl = false;
 	int slot;
 	int rc = 0;
 
@@ -652,8 +654,7 @@ static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
 	 */
 	if (tb_data->cur_tb_mode == APPLETB_CMD_MODE_OFF ||
 	    tb_data->cur_tb_disp == APPLETB_CMD_DISP_OFF) {
-		input_event(field->hidinput->input, EV_KEY, KEY_UNKNOWN, 1);
-		input_event(field->hidinput->input, EV_KEY, KEY_UNKNOWN, 0);
+		send_dummy = true;
 		rc = 1;
 	/* translate special keys */
 	} else if (usage->type == EV_KEY && new_code &&
@@ -662,8 +663,7 @@ static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
 		    ||
 		    (value == 0 && tb_data->last_tb_keys_translated[slot]))) {
 		tb_data->last_tb_keys_translated[slot] = true;
-		input_event(field->hidinput->input, usage->type, new_code,
-			    value);
+		send_trnsl = true;
 		rc = 1;
 	/* everything else handled normally */
 	} else {
@@ -671,6 +671,23 @@ static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
 	}
 
 	spin_unlock_irqrestore(&tb_data->tb_mode_lock, flags);
+
+	/*
+	 * Need to send these input events outside of the lock, as otherwise
+	 * we can run into the following deadlock:
+	 *            Task 1                         Task 2
+	 *     appletb_tb_event()             input_event()
+	 *       acquire tb_mode_lock           acquire dev->event_lock
+	 *       input_event()                  appletb_inp_event()
+	 *         acquire dev->event_lock        acquire tb_mode_lock
+	 */
+	if (send_dummy) {
+		input_event(field->hidinput->input, EV_KEY, KEY_UNKNOWN, 1);
+		input_event(field->hidinput->input, EV_KEY, KEY_UNKNOWN, 0);
+	} else if (send_trnsl) {
+		input_event(field->hidinput->input, usage->type, new_code,
+			    value);
+	}
 
 	return rc;
 }
