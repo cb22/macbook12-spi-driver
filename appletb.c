@@ -422,7 +422,8 @@ static unsigned char appletb_get_fn_tb_mode(struct appletb_data *tb_data)
 	}
 }
 
-/* Switch touchbar mode and display when mode or display not the desired ones.
+/*
+ * Switch touchbar mode and display when mode or display not the desired ones.
  */
 static void appletb_update_touchbar_no_lock(struct appletb_data *tb_data,
 					    bool force)
@@ -432,7 +433,7 @@ static void appletb_update_touchbar_no_lock(struct appletb_data *tb_data,
 	bool need_update = false;
 
 	/*
-	 * calculate the new modes:
+	 * Calculate the new modes:
 	 *   idle_timeout:
 	 *     -1  always on
 	 *      0  always off
@@ -451,7 +452,8 @@ static void appletb_update_touchbar_no_lock(struct appletb_data *tb_data,
 							APPLETB_CMD_DISP_ON;
 	}
 
-	/* see if we need to update the touchbar, taking into account that we
+	/*
+	 * See if we need to update the touchbar, taking into account that we
 	 * generally don't want to switch modes while a touchbar key is pressed.
 	 */
 	if (appletb_get_cur_tb_mode(tb_data) != want_mode &&
@@ -1068,7 +1070,8 @@ static void appletb_usb_hack_reg_hid_driver(struct work_struct *work)
 			hid->driver->name);
 
 	} else {
-		/* detach current driver, and re-register ourselves in order to
+		/*
+		 * Detach current driver, and re-register ourselves in order to
 		 * trigger attachment.
 		 */
 		pr_info("releasing current hid driver '%s'\n",
