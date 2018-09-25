@@ -31,6 +31,7 @@
 #include <linux/spinlock.h>
 #include <linux/mutex.h>
 #include <linux/sysfs.h>
+#include <linux/acpi.h>
 #include <linux/version.h>
 
 #ifdef UPSTREAM
@@ -49,6 +50,8 @@
 #define HID_USAGE_MODE		(HID_UP_CUSTOM | 0x0004)
 #define HID_USAGE_APPLE_APP	(HID_UP_APPLE  | 0x0001)
 #define HID_USAGE_DISP		(HID_UP_APPLE  | 0x0021)
+
+#define APPLETB_ACPI_ASOC_HID	"APP7777"
 
 #define APPLETB_MAX_TB_KEYS	13	/* ESC, F1-F12 */
 
@@ -121,6 +124,8 @@ static const struct attribute_group appletb_attr_group = {
 struct appletb_device {
 	struct kref		kref;
 	bool			active;
+
+	acpi_handle		asoc_socw;
 
 	struct appletb_report_info {
 		struct hid_device	*hdev;
@@ -969,9 +974,20 @@ static void appletb_mark_active(struct appletb_device *tb_dev, bool active)
 	spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
 }
 
+static acpi_status appletb_get_acpi_handle_cb(acpi_handle object,
+					      u32 nesting_level, void *context,
+					      void **return_value)
+{
+	*return_value = object;
+	return AE_CTRL_TERMINATE;
+}
+
 struct appletb_device *appletb_alloc_device(void)
 {
 	struct appletb_device *tb_dev;
+	acpi_handle asoc_handle;
+	acpi_status sts;
+	int rc;
 
 	/* allocate */
 	tb_dev = kzalloc(sizeof(*tb_dev), GFP_KERNEL);
@@ -983,7 +999,34 @@ struct appletb_device *appletb_alloc_device(void)
 	spin_lock_init(&tb_dev->tb_mode_lock);
 	INIT_DELAYED_WORK(&tb_dev->tb_mode_work, appletb_set_tb_mode_worker);
 
+	/* get iBridge acpi power control method */
+	sts = acpi_get_devices(APPLETB_ACPI_ASOC_HID,
+			       appletb_get_acpi_handle_cb, NULL, &asoc_handle);
+	if (ACPI_FAILURE(sts)) {
+		pr_err("Error getting handle for ACPI ASOC device: %s\n",
+		       acpi_format_exception(sts));
+		rc = -ENXIO;
+		goto free_mem;
+	}
+
+	sts = acpi_get_handle(asoc_handle, "SOCW", &tb_dev->asoc_socw);
+	if (ACPI_FAILURE(sts)) {
+		pr_err("Error getting handle for ASOC.SOCW method: %s\n",
+		       acpi_format_exception(sts));
+		rc = -ENXIO;
+		goto free_mem;
+	}
+
+	/* ensure iBridge is powered on */
+	sts = acpi_execute_simple_method(tb_dev->asoc_socw, NULL, 1);
+	if (ACPI_FAILURE(sts))
+		pr_warn("SOCW(1) failed: %s\n", acpi_format_exception(sts));
+
 	return tb_dev;
+
+free_mem:
+	kfree(tb_dev);
+	return ERR_PTR(rc);
 }
 
 static void appletb_free_device(struct kref *kref)
@@ -1178,13 +1221,40 @@ static void appletb_remove(struct hid_device *hdev)
 }
 
 #ifdef CONFIG_PM
-/* TODO: is this necessary? */
-static int appletb_reset_resume(struct hid_device *hdev)
+static int appletb_suspend(struct hid_device *hdev, pm_message_t message)
 {
 	struct appletb_device *tb_dev = hid_get_drvdata(hdev);
+	int rc;
 
 	if (hdev != tb_dev->mode_info.hdev)
 		return 0;
+
+	if (message.event != PM_EVENT_SUSPEND &&
+	    message.event != PM_EVENT_FREEZE)
+		return 0;
+
+	/* put iBridge to sleep */
+	rc = acpi_execute_simple_method(tb_dev->asoc_socw, NULL, 0);
+	if (ACPI_FAILURE(rc))
+		pr_warn("SOCW(0) failed: %s\n", acpi_format_exception(rc));
+
+	hid_info(hdev, "device suspend done.\n");
+
+	return 0;
+}
+
+static int appletb_reset_resume(struct hid_device *hdev)
+{
+	struct appletb_device *tb_dev = hid_get_drvdata(hdev);
+	int rc;
+
+	if (hdev != tb_dev->mode_info.hdev)
+		return 0;
+
+	/* wake up iBridge */
+	rc = acpi_execute_simple_method(tb_dev->asoc_socw, NULL, 1);
+	if (ACPI_FAILURE(rc))
+		pr_warn("SOCW(1) failed: %s\n", acpi_format_exception(rc));
 
 	/* restore touchbar state */
 	appletb_set_tb_mode(tb_dev, tb_dev->cur_tb_mode);
@@ -1214,6 +1284,7 @@ static struct hid_driver appletb_driver = {
 	.event = appletb_tb_event,
 	.input_configured = appletb_input_configured,
 #ifdef CONFIG_PM
+	.suspend = appletb_suspend,
 	.reset_resume = appletb_reset_resume,
 #endif
 };
