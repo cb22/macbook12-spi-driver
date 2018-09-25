@@ -42,10 +42,13 @@
 
 #define USB_ID_VENDOR_APPLE	0x05ac
 #define USB_ID_PRODUCT_IBRIDGE	0x8600
-#define APPLETB_TB_SIMPLE_IFNUM	2
-#define APPLETB_TB_FANCY_IFNUM	3
 
 #define APPLETB_BASIC_CONFIG	1
+
+#define HID_UP_APPLE		0xff120000
+#define HID_USAGE_MODE		(HID_UP_CUSTOM | 0x0004)
+#define HID_USAGE_APPLE_APP	(HID_UP_APPLE  | 0x0001)
+#define HID_USAGE_DISP		(HID_UP_APPLE  | 0x0021)
 
 #define APPLETB_MAX_TB_KEYS	13	/* ESC, F1-F12 */
 
@@ -124,6 +127,8 @@ struct appletb_device {
 		struct usb_interface	*usb_iface;
 		unsigned int		usb_ifnum;
 		unsigned int		usb_epnum;
+		unsigned int		report_id;
+		unsigned int		report_type;
 	}			mode_info, disp_info;
 
 	struct input_handler	inp_handler;
@@ -205,7 +210,10 @@ static int appletb_send_usb_ctrl_req(struct usb_interface *iface,
 	return (rc > 0) ? 0 : rc;
 }
 
-static int appletb_set_tb_mode(struct appletb_device *tb_dev, unsigned char mode)
+#define WVALUE(info)	(info.report_type << 8 | info.report_id)
+
+static int appletb_set_tb_mode(struct appletb_device *tb_dev,
+			       unsigned char mode)
 {
 	int rc;
 
@@ -214,10 +222,11 @@ static int appletb_set_tb_mode(struct appletb_device *tb_dev, unsigned char mode
 
 	rc = appletb_send_usb_ctrl_req(tb_dev->mode_info.usb_iface,
 				       tb_dev->mode_info.usb_epnum,
-				       USB_REQ_SET_CONFIGURATION,
+				       HID_REQ_SET_REPORT,
 				       USB_DIR_OUT | USB_TYPE_VENDOR |
 							USB_RECIP_DEVICE,
-				       0x0202, tb_dev->mode_info.usb_ifnum,
+				       WVALUE(tb_dev->mode_info),
+				       tb_dev->mode_info.usb_ifnum,
 				       &mode, 1);
 	if (rc < 0)
 		pr_err("Failed to set touchbar mode to %u (%d)\n", mode, rc);
@@ -225,9 +234,10 @@ static int appletb_set_tb_mode(struct appletb_device *tb_dev, unsigned char mode
 	return rc;
 }
 
-static int appletb_set_tb_disp(struct appletb_device *tb_dev, unsigned char disp)
+static int appletb_set_tb_disp(struct appletb_device *tb_dev,
+			       unsigned char disp)
 {
-	unsigned char cmd[] = { 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	unsigned char cmd[] = { 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	int rc;
 
 	if (!tb_dev->disp_info.usb_iface)
@@ -247,13 +257,16 @@ static int appletb_set_tb_disp(struct appletb_device *tb_dev, unsigned char disp
 			       rc);
 	}
 
+	cmd[0] = tb_dev->disp_info.report_id;
 	cmd[2] = disp;
+
 	rc = appletb_send_usb_ctrl_req(tb_dev->disp_info.usb_iface,
 				       tb_dev->disp_info.usb_epnum,
-				       USB_REQ_SET_CONFIGURATION,
+				       HID_REQ_SET_REPORT,
 				       USB_DIR_OUT | USB_TYPE_CLASS |
 						USB_RECIP_INTERFACE,
-				       0x0302, tb_dev->disp_info.usb_ifnum,
+				       WVALUE(tb_dev->disp_info),
+				       tb_dev->disp_info.usb_ifnum,
 				       cmd, sizeof(cmd));
 	if (rc < 0)
 		pr_err("Failed to set touchbar display to %u (%d)\n", disp, rc);
@@ -641,6 +654,9 @@ static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
 	int slot;
 	int rc = 0;
 
+	if ((usage->hid & HID_USAGE_PAGE) != HID_UP_KEYBOARD)
+		return 0;
+
 	/*
 	 * Skip non-touchbar keys.
 	 *
@@ -744,9 +760,7 @@ static void appletb_inp_event(struct input_handle *handle, unsigned int type,
 }
 
 /* Find and save the usb-device associated with the touchbar input device */
-static struct usb_interface *appletb_get_usb_iface(
-					struct appletb_report_info *report_info,
-					struct hid_device *hdev)
+static struct usb_interface *appletb_get_usb_iface(struct hid_device *hdev)
 {
 	struct device *dev = &hdev->dev;
 
@@ -856,6 +870,96 @@ static int appletb_input_configured(struct hid_device *hdev,
 	return 0;
 }
 
+static struct hid_field *appletb_find_hid_field(struct hid_device *hdev,
+						unsigned int application,
+						unsigned int field_usage)
+{
+	static const int report_types[] = { HID_INPUT_REPORT, HID_OUTPUT_REPORT,
+					    HID_FEATURE_REPORT };
+	struct hid_report *report;
+	int t, f, u;
+
+	for (t = 0; t < ARRAY_SIZE(report_types); t++) {
+		struct list_head *report_list =
+			    &hdev->report_enum[report_types[t]].report_list;
+		list_for_each_entry(report, report_list, list) {
+			if (report->application != application)
+				continue;
+
+			for (f = 0; f < report->maxfield; f++) {
+				struct hid_field *field = report->field[f];
+
+				if (field->logical == field_usage)
+					return field;
+
+				for (u = 0; u < field->maxusage; u++) {
+					if (field->usage[u].hid == field_usage)
+						return field;
+				}
+			}
+		}
+	}
+
+	return NULL;
+}
+
+static int appletb_fill_report_info(struct appletb_device *tb_dev,
+				    struct hid_device *hdev)
+{
+	struct appletb_report_info *report_info = NULL;
+	struct usb_interface *usb_iface;
+	struct hid_field *field;
+
+	field = appletb_find_hid_field(hdev, HID_GD_KEYBOARD, HID_USAGE_MODE);
+	if (field) {
+		report_info = &tb_dev->mode_info;
+	} else {
+		field = appletb_find_hid_field(hdev, HID_USAGE_APPLE_APP,
+					       HID_USAGE_DISP);
+		if (field)
+			report_info = &tb_dev->disp_info;
+	}
+
+	if (!report_info)
+		return 0;
+
+	usb_iface = appletb_get_usb_iface(hdev);
+	if (!usb_iface) {
+		hid_err(hdev, "Failed to find usb interface for hid device\n");
+		return -ENODEV;
+	}
+
+	report_info->hdev = hdev;
+
+	report_info->usb_iface = usb_get_intf(usb_iface);
+	report_info->usb_ifnum =
+			usb_iface->cur_altsetting->desc.bInterfaceNumber;
+	report_info->usb_epnum = 0;
+
+	report_info->report_id = field->report->id;
+	switch (field->report->type) {
+	case HID_INPUT_REPORT:
+		report_info->report_type = 0x01; break;
+	case HID_OUTPUT_REPORT:
+		report_info->report_type = 0x02; break;
+	case HID_FEATURE_REPORT:
+		report_info->report_type = 0x03; break;
+	}
+
+	return 1;
+}
+
+static struct appletb_report_info *appletb_get_report_info(
+						struct appletb_device *tb_dev,
+						struct hid_device *hdev)
+{
+	if (hdev == tb_dev->mode_info.hdev)
+		return &tb_dev->mode_info;
+	if (hdev == tb_dev->disp_info.hdev)
+		return &tb_dev->disp_info;
+	return NULL;
+}
+
 static void appletb_mark_active(struct appletb_device *tb_dev, bool active)
 {
 	unsigned long flags;
@@ -914,8 +1018,6 @@ static int appletb_probe(struct hid_device *hdev,
 {
 	struct appletb_device *tb_dev;
 	struct appletb_report_info *report_info;
-	struct usb_interface *usb_iface;
-	int iface_num;
 	struct usb_device *udev;
 	int rc;
 
@@ -946,45 +1048,15 @@ static int appletb_probe(struct hid_device *hdev,
 	hid_set_drvdata(hdev, tb_dev);
 
 	/* initialize the report info */
-	usb_iface = appletb_get_usb_iface(report_info, hdev);
-	if (!usb_iface) {
-		hid_err(hdev, "Failed to find usb device for touchbar\n");
-		rc = -ENXIO;
-		goto free_mem;
-	}
-
-	iface_num = usb_iface->cur_altsetting->desc.bInterfaceNumber;
-	switch (iface_num) {
-	case APPLETB_TB_SIMPLE_IFNUM:
-		report_info = &tb_dev->mode_info;
-		break;
-	case APPLETB_TB_FANCY_IFNUM:
-		report_info = &tb_dev->disp_info;
-		break;
-	default:
-		hid_err(hdev, "Unknown interface type\n");
-		rc = -ENXIO;
-		goto free_mem;
-	}
-
-	if (report_info->hdev) {
-		hid_err(hdev, "Duplicate registration of interface %d\n",
-			iface_num);
-		rc = -EBUSY;
-		goto free_mem;
-	}
-
-	report_info->hdev = hdev;
-
-	report_info->usb_iface = usb_get_intf(usb_iface);
-	report_info->usb_ifnum = iface_num;
-	report_info->usb_epnum = 0;
-
 	rc = hid_parse(hdev);
 	if (rc) {
 		hid_err(hdev, "hid parse failed (%d)\n", rc);
-		goto free_iface;
+		goto free_mem;
 	}
+
+	rc = appletb_fill_report_info(tb_dev, hdev);
+	if (rc < 0)
+		goto free_mem;
 
 	/* start the hid */
 	rc = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
@@ -1051,9 +1123,12 @@ cancel_work:
 	appletb_mark_active(tb_dev, false);
 	hid_hw_stop(hdev);
 free_iface:
-	usb_put_intf(report_info->usb_iface);
-	report_info->usb_iface = NULL;
-	report_info->hdev = NULL;
+	report_info = appletb_get_report_info(tb_dev, hdev);
+	if (report_info) {
+		usb_put_intf(report_info->usb_iface);
+		report_info->usb_iface = NULL;
+		report_info->hdev = NULL;
+	}
 free_mem:
 	kref_put(&tb_dev->kref, appletb_free_device);
 unlock:
@@ -1088,13 +1163,7 @@ static void appletb_remove(struct hid_device *hdev)
 		appletb_mark_active(tb_dev, false);
 	}
 
-	if (hdev == tb_dev->mode_info.hdev)
-		report_info = &tb_dev->mode_info;
-	else if (hdev == tb_dev->disp_info.hdev)
-		report_info = &tb_dev->disp_info;
-	else
-		report_info = NULL;
-
+	report_info = appletb_get_report_info(tb_dev, hdev);
 	if (report_info) {
 		usb_put_intf(report_info->usb_iface);
 		report_info->usb_iface = NULL;
@@ -1266,8 +1335,7 @@ static int appletb_hid_bus_changed(struct notifier_block *nb,
 		return NOTIFY_DONE;
 
 	intf = to_usb_interface(hdev->dev.parent);
-	if (intf->cur_altsetting->desc.bInterfaceNumber !=
-	    APPLETB_TB_SIMPLE_IFNUM)
+	if (intf->cur_altsetting->desc.bInterfaceNumber != 2)
 		return NOTIFY_DONE;
 
 	switch (action) {
