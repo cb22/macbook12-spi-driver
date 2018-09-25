@@ -33,10 +33,19 @@
 #include <linux/sysfs.h>
 #include <linux/version.h>
 
+#ifdef UPSTREAM
+#include "usbhid/usbhid.h"
+#else
+#define	hid_to_usb_dev(hid_dev) \
+	to_usb_device((hid_dev)->dev.parent->parent)
+#endif
+
 #define USB_ID_VENDOR_APPLE	0x05ac
 #define USB_ID_PRODUCT_IBRIDGE	0x8600
 #define APPLETB_TB_SIMPLE_IFNUM	2
 #define APPLETB_TB_FANCY_IFNUM	3
+
+#define APPLETB_BASIC_CONFIG	1
 
 #define APPLETB_MAX_TB_KEYS	13	/* ESC, F1-F12 */
 
@@ -907,7 +916,16 @@ static int appletb_probe(struct hid_device *hdev,
 	struct appletb_report_info *report_info;
 	struct usb_interface *usb_iface;
 	int iface_num;
+	struct usb_device *udev;
 	int rc;
+
+	/* check usb config first */
+	udev = hid_to_usb_dev(hdev);
+
+	if (udev->actconfig->desc.bConfigurationValue != APPLETB_BASIC_CONFIG) {
+		rc = usb_driver_set_configuration(udev, APPLETB_BASIC_CONFIG);
+		return rc ? rc : -ENODEV;
+	}
 
 	/* Allocate the driver data */
 	mutex_lock(&appletb_dev_lock);
