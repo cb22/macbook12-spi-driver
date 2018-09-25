@@ -181,23 +181,15 @@ static int appletb_send_usb_ctrl_req(struct usb_interface *iface,
 
 	kfree(buffer);
 
-	return likely(rc > 0) ? 0 : rc;
+	return (rc > 0) ? 0 : rc;
 }
 
 static int appletb_set_tb_mode(struct appletb_data *tb_data, unsigned char mode)
 {
 	int rc;
-	bool autopm_off = false;
 
 	if (!tb_data->tb_usb_iface)
 		return -1;
-
-	rc = usb_autopm_get_interface(tb_data->tb_usb_iface);
-	if (likely(rc == 0))
-		autopm_off = true;
-	else
-		pr_err("Failed to disable auto-pm on touchbar device (%d)\n",
-		       rc);
 
 	rc = appletb_send_usb_ctrl_req(tb_data->tb_usb_iface,
 				       tb_data->tb_usb_epnum,
@@ -205,11 +197,8 @@ static int appletb_set_tb_mode(struct appletb_data *tb_data, unsigned char mode)
 				       USB_DIR_OUT | USB_TYPE_VENDOR |
 							USB_RECIP_DEVICE,
 				       0x0302, tb_data->tb_usb_ifnum, &mode, 1);
-	if (unlikely(rc < 0))
+	if (rc < 0)
 		pr_err("Failed to set touchbar mode to %u (%d)\n", mode, rc);
-
-	if (autopm_off)
-		usb_autopm_put_interface(tb_data->tb_usb_iface);
 
 	return rc;
 }
@@ -222,10 +211,14 @@ static int appletb_set_tb_disp(struct appletb_data *tb_data, unsigned char disp)
 	if (!tb_data->tb_usb_iface)
 		return -1;
 
+	/*
+	 * Keep the USB interface powered on while the touchbar display is on
+	 * for better responsiveness.
+	 */
 	if (disp != APPLETB_CMD_DISP_OFF &&
 	    tb_data->cur_tb_disp == APPLETB_CMD_DISP_OFF) {
 		rc = usb_autopm_get_interface(tb_data->tb_usb_iface);
-		if (likely(rc == 0))
+		if (rc == 0)
 			tb_data->tb_autopm_off = true;
 		else
 			pr_err("Failed to disable auto-pm on touchbar device (%d)\n",
@@ -240,7 +233,7 @@ static int appletb_set_tb_disp(struct appletb_data *tb_data, unsigned char disp)
 						USB_RECIP_INTERFACE,
 				       0x0302, tb_data->tb_usb_ifnum + 1,
 				       cmd, sizeof(cmd));
-	if (unlikely(rc < 0))
+	if (rc < 0)
 		pr_err("Failed to set touchbar display to %u (%d)\n", disp, rc);
 
 	if (disp == APPLETB_CMD_DISP_OFF &&
