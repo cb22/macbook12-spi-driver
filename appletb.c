@@ -35,7 +35,7 @@
 #define USB_ID_PRODUCT_IBRIDGE	0x8600
 #define APPLETB_TB_SIMPLE_IFNUM 2
 
-#define MAX_TB_KEYS		13	/* ESC, F1-F12 */
+#define APPLETB_MAX_TB_KEYS	13	/* ESC, F1-F12 */
 
 #define APPLETB_CMD_MODE_ESC	0
 #define APPLETB_CMD_MODE_FN	1
@@ -112,8 +112,8 @@ struct appletb_data {
 	struct input_handle	kbd_handle;
 	struct input_handle	tpd_handle;
 
-	bool			last_tb_keys_pressed[MAX_TB_KEYS];
-	bool			last_tb_keys_translated[MAX_TB_KEYS];
+	bool			last_tb_keys_pressed[APPLETB_MAX_TB_KEYS];
+	bool			last_tb_keys_translated[APPLETB_MAX_TB_KEYS];
 	bool			last_fn_pressed;
 
 	ktime_t			last_event_time;
