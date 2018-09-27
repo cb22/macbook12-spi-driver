@@ -6,12 +6,34 @@
  */
 
 /**
- * This is a basic driver to enable the touchbar on a MacBookPro13,2 and
- * MacBookPro13,3. The touchbar shows up as two HID interfaces on the iBridge
- * USB device. The first interface appears to provide for some simple, basic
- * modes including special-keys and function-keys; the second interface is
- * more elaborate and allows custom configurations. This driver currently
- * interacts mainly with the first one, though it uses the second for dimming.
+ * MacBookPro models with a touchbar (13,[23] and 14,[23]) have an Apple
+ * iBridge chip which exposes the touchbar and built-in webcam (iSight).
+ * This shows up in the system as a USB device with 3 configurations:
+ * 'Default iBridge Interfaces', 'Default iBridge Interfaces(OS X)', and
+ * 'Default iBridge Interfaces(Recovery)'. While the second one is used by
+ * MacOS to provide the fancy touchbar functionality with custom buttons
+ * etc, this driver just uses the first.
+ *
+ * In the first (default after boot) configuration, 4 usb interfaces are
+ * exposed: 2 related to the webcam, and 2 USB HID interfaces representing
+ * the touchbar. The webcam interfaces are already handled by the uvcvideo
+ * driver; furthermore, the handling of the input reports when "keys" on
+ * the touchbar are pressed is already handled properly by the generic USB
+ * HID core. This leaves the management of the touchbar modes (e.g.
+ * switching between function and special keys when the FN key is pressed)
+ * and the display (dimming and turning off), as well as the key-remapping
+ * when the FN key is pressed, which are what this driver implements.
+ *
+ * The first USB HID interface supports two reports, an input report that
+ * is used to report the key presses, and an output report which can be
+ * used to set the touchbar "mode": touchbar off (in which case no touches
+ * are reported at all), escape key only, escape + 12 function keys, and
+ * escape + several special keys (including brightness, audio volume,
+ * etc).  The second interface supports several, complex reports, most of
+ * which are unknown at this time, but one of which has been determined to
+ * allow for controlling of the touchbar's brightness: off (though touches
+ * are still reported), dimmed, and full brightness. This driver makes
+ * uses of these two reports.
  */
 
 #define pr_fmt(fmt) "appletb: " fmt
