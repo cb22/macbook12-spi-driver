@@ -152,7 +152,6 @@ struct appletb_device {
 	struct appletb_report_info {
 		struct hid_device	*hdev;
 		struct usb_interface	*usb_iface;
-		unsigned int		usb_ifnum;
 		unsigned int		usb_epnum;
 		unsigned int		report_id;
 		unsigned int		report_type;
@@ -206,13 +205,12 @@ static const struct appletb_key_translation appletb_fn_codes[] = {
 	{ KEY_F12, KEY_VOLUMEUP },
 };
 
-static int appletb_send_usb_ctrl_req(struct usb_interface *iface,
-				     unsigned int ep, __u8 request,
-				     __u8 requesttype, __u16 value, __u16 index,
-				     void *data, __u16 size)
+static int appletb_send_hid_report(struct appletb_report_info *rinfo,
+				   __u8 requesttype, void *data, __u16 size)
 {
 	void *buffer;
-	struct usb_device *dev = interface_to_usbdev(iface);
+	struct usb_device *dev = interface_to_usbdev(rinfo->usb_iface);
+	u8 ifnum = rinfo->usb_iface->cur_altsetting->desc.bInterfaceNumber;
 	int tries = 0;
 	int rc;
 
@@ -223,9 +221,11 @@ static int appletb_send_usb_ctrl_req(struct usb_interface *iface,
 	memcpy(buffer, data, size);
 
 	do {
-		rc = usb_control_msg(dev, usb_sndctrlpipe(dev, ep), request,
-				     requesttype, value, index, buffer, size,
-				     2000);
+		rc = usb_control_msg(dev,
+				     usb_sndctrlpipe(dev, rinfo->usb_epnum),
+				     HID_REQ_SET_REPORT, requesttype,
+				     rinfo->report_type << 8 | rinfo->report_id,
+				     ifnum, buffer, size, 2000);
 		if (rc != -EPIPE)
 			break;
 
@@ -237,8 +237,6 @@ static int appletb_send_usb_ctrl_req(struct usb_interface *iface,
 	return (rc > 0) ? 0 : rc;
 }
 
-#define WVALUE(info)	(info.report_type << 8 | info.report_id)
-
 static int appletb_set_tb_mode(struct appletb_device *tb_dev,
 			       unsigned char mode)
 {
@@ -247,14 +245,10 @@ static int appletb_set_tb_mode(struct appletb_device *tb_dev,
 	if (!tb_dev->mode_info.usb_iface)
 		return -1;
 
-	rc = appletb_send_usb_ctrl_req(tb_dev->mode_info.usb_iface,
-				       tb_dev->mode_info.usb_epnum,
-				       HID_REQ_SET_REPORT,
-				       USB_DIR_OUT | USB_TYPE_VENDOR |
+	rc = appletb_send_hid_report(&tb_dev->mode_info,
+				     USB_DIR_OUT | USB_TYPE_VENDOR |
 							USB_RECIP_DEVICE,
-				       WVALUE(tb_dev->mode_info),
-				       tb_dev->mode_info.usb_ifnum,
-				       &mode, 1);
+				     &mode, 1);
 	if (rc < 0)
 		pr_err("Failed to set touchbar mode to %u (%d)\n", mode, rc);
 
@@ -264,7 +258,7 @@ static int appletb_set_tb_mode(struct appletb_device *tb_dev,
 static int appletb_set_tb_disp(struct appletb_device *tb_dev,
 			       unsigned char disp)
 {
-	unsigned char cmd[] = { 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	unsigned char report[] = { 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	int rc;
 
 	if (!tb_dev->disp_info.usb_iface)
@@ -284,17 +278,13 @@ static int appletb_set_tb_disp(struct appletb_device *tb_dev,
 			       rc);
 	}
 
-	cmd[0] = tb_dev->disp_info.report_id;
-	cmd[2] = disp;
+	report[0] = tb_dev->disp_info.report_id;
+	report[2] = disp;
 
-	rc = appletb_send_usb_ctrl_req(tb_dev->disp_info.usb_iface,
-				       tb_dev->disp_info.usb_epnum,
-				       HID_REQ_SET_REPORT,
-				       USB_DIR_OUT | USB_TYPE_CLASS |
+	rc = appletb_send_hid_report(&tb_dev->disp_info,
+				     USB_DIR_OUT | USB_TYPE_CLASS |
 						USB_RECIP_INTERFACE,
-				       WVALUE(tb_dev->disp_info),
-				       tb_dev->disp_info.usb_ifnum,
-				       cmd, sizeof(cmd));
+				     report, sizeof(report));
 	if (rc < 0)
 		pr_err("Failed to set touchbar display to %u (%d)\n", disp, rc);
 
@@ -959,8 +949,6 @@ static int appletb_fill_report_info(struct appletb_device *tb_dev,
 	report_info->hdev = hdev;
 
 	report_info->usb_iface = usb_get_intf(usb_iface);
-	report_info->usb_ifnum =
-			usb_iface->cur_altsetting->desc.bInterfaceNumber;
 	report_info->usb_epnum = 0;
 
 	report_info->report_id = field->report->id;
