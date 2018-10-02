@@ -34,6 +34,12 @@
  * allow for controlling of the touchbar's brightness: off (though touches
  * are still reported), dimmed, and full brightness. This driver makes
  * uses of these two reports.
+ *
+ * Lastly, this driver also exposes the ambient light sensor that is
+ * exposes by the iBridge as a HID sensor device on the second USB
+ * interface. While this doesn't strictly have anything to do with the
+ * touchbar itself, it does use the same USB interface as the touchbar
+ * management does, and hence needs to be part of the HID driver.
  */
 
 #define pr_fmt(fmt) "appletb: " fmt
@@ -54,6 +60,12 @@
 #include <linux/mutex.h>
 #include <linux/sysfs.h>
 #include <linux/acpi.h>
+#include <linux/hid-sensor-ids.h>
+#include <linux/iio/iio.h>
+#include <linux/iio/buffer.h>
+#include <linux/iio/trigger.h>
+#include <linux/iio/triggered_buffer.h>
+#include <linux/iio/trigger_consumer.h>
 #include <linux/version.h>
 
 #ifdef UPSTREAM
@@ -99,6 +111,8 @@
 #define APPLETB_DEVID_TOUCHPAD	2
 
 #define APPLETB_MAX_DIM_TIME	30
+
+#define APPLETB_ALS_DEF_CHANGE_SENS	25
 
 static int appletb_tb_def_idle_timeout = 5 * 60;
 module_param_named(idle_timeout, appletb_tb_def_idle_timeout, int, 0444);
@@ -180,6 +194,13 @@ struct appletb_device {
 	int			idle_timeout;
 	bool			dim_to_is_calc;
 	int			fn_mode;
+
+	struct work_struct	als_work;
+	struct hid_device	*als_dev;
+	struct hid_report	*als_cfg_report;
+	struct hid_field	*als_illum_field;
+	struct iio_dev		*als_iio_dev;
+	struct iio_trigger	*als_iio_trig;
 };
 
 static struct appletb_device *appletb_dev;
@@ -658,19 +679,44 @@ static int appletb_tb_key_to_slot(unsigned int code)
 	}
 }
 
-static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
-			    struct hid_usage *usage, __s32 value)
+static void appletb_push_new_als_value(struct appletb_device *tb_dev,
+				       __s32 value)
 {
-	struct appletb_device *tb_dev = hid_get_drvdata(hdev);
+	__s32 buf[2] = { value, value };
+
+	iio_push_to_buffers(tb_dev->als_iio_dev, buf);
+}
+
+static int appletb_hid_als_event(struct appletb_device *tb_dev,
+				 struct hid_field *field,
+				 struct hid_usage *usage, __s32 value)
+{
 	unsigned long flags;
+	int rc = 0;
+
+	spin_lock_irqsave(&tb_dev->tb_mode_lock, flags);
+
+	if (tb_dev->active && tb_dev->als_iio_dev &&
+	    usage->hid == HID_USAGE_SENSOR_LIGHT_ILLUM) {
+		appletb_push_new_als_value(tb_dev, value);
+		rc = 1;
+	}
+
+	spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+
+	return rc;
+}
+
+static int appletb_hid_key_event(struct appletb_device *tb_dev,
+				 struct hid_field *field,
+				 struct hid_usage *usage, __s32 value)
+{
 	unsigned int new_code = 0;
+	unsigned long flags;
 	bool send_dummy = false;
 	bool send_trnsl = false;
 	int slot;
 	int rc = 0;
-
-	if ((usage->hid & HID_USAGE_PAGE) != HID_UP_KEYBOARD)
-		return 0;
 
 	/*
 	 * Skip non-touchbar keys.
@@ -683,15 +729,15 @@ static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
 	if (slot < 0)
 		return 0;
 
-	if (usage->type == EV_KEY)
-		new_code = appletb_fn_to_special(usage->code);
-
 	spin_lock_irqsave(&tb_dev->tb_mode_lock, flags);
 
 	if (!tb_dev->active) {
 		spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
 		return 0;
 	}
+
+	if (usage->type == EV_KEY)
+		new_code = appletb_fn_to_special(usage->code);
 
 	/* remember which (untranslated) touchbar keys are pressed */
 	if (usage->type == EV_KEY && value != 2)
@@ -732,7 +778,7 @@ static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
 	 * Need to send these input events outside of the lock, as otherwise
 	 * we can run into the following deadlock:
 	 *            Task 1                         Task 2
-	 *     appletb_tb_event()             input_event()
+	 *     appletb_hid_event()            input_event()
 	 *       acquire tb_mode_lock           acquire dev->event_lock
 	 *       input_event()                  appletb_inp_event()
 	 *         acquire dev->event_lock        acquire tb_mode_lock
@@ -746,6 +792,18 @@ static int appletb_tb_event(struct hid_device *hdev, struct hid_field *field,
 	}
 
 	return rc;
+}
+
+static int appletb_hid_event(struct hid_device *hdev, struct hid_field *field,
+			     struct hid_usage *usage, __s32 value)
+{
+	struct appletb_device *tb_dev = hid_get_drvdata(hdev);
+
+	if ((usage->hid & HID_USAGE_PAGE) == HID_UP_SENSOR)
+		return appletb_hid_als_event(tb_dev, field, usage, value);
+	else if ((usage->hid & HID_USAGE_PAGE) == HID_UP_KEYBOARD)
+		return appletb_hid_key_event(tb_dev, field, usage, value);
+	return 0;
 }
 
 static void appletb_inp_event(struct input_handle *handle, unsigned int type,
@@ -885,6 +943,26 @@ static int appletb_input_configured(struct hid_device *hdev,
 	return 0;
 }
 
+static struct hid_field *appletb_find_report_field(struct hid_report *report,
+						   unsigned int field_usage)
+{
+	int f, u;
+
+	for (f = 0; f < report->maxfield; f++) {
+		struct hid_field *field = report->field[f];
+
+		if (field->logical == field_usage)
+			return field;
+
+		for (u = 0; u < field->maxusage; u++) {
+			if (field->usage[u].hid == field_usage)
+				return field;
+		}
+	}
+
+	return NULL;
+}
+
 static struct hid_field *appletb_find_hid_field(struct hid_device *hdev,
 						unsigned int application,
 						unsigned int field_usage)
@@ -892,7 +970,8 @@ static struct hid_field *appletb_find_hid_field(struct hid_device *hdev,
 	static const int report_types[] = { HID_INPUT_REPORT, HID_OUTPUT_REPORT,
 					    HID_FEATURE_REPORT };
 	struct hid_report *report;
-	int t, f, u;
+	struct hid_field *field;
+	int t;
 
 	for (t = 0; t < ARRAY_SIZE(report_types); t++) {
 		struct list_head *report_list =
@@ -901,21 +980,29 @@ static struct hid_field *appletb_find_hid_field(struct hid_device *hdev,
 			if (report->application != application)
 				continue;
 
-			for (f = 0; f < report->maxfield; f++) {
-				struct hid_field *field = report->field[f];
-
-				if (field->logical == field_usage)
-					return field;
-
-				for (u = 0; u < field->maxusage; u++) {
-					if (field->usage[u].hid == field_usage)
-						return field;
-				}
-			}
+			field = appletb_find_report_field(report, field_usage);
+			if (field)
+				return field;
 		}
 	}
 
 	return NULL;
+}
+
+static int appletb_get_field_value_for_usage(struct hid_field *field,
+					     unsigned int usage)
+{
+	int u;
+
+	if (!field)
+		return 0;
+
+	for (u = 0; u < field->maxusage; u++) {
+		if (field->usage[u].hid == usage)
+			return u + field->logical_minimum;
+	}
+
+	return -1;
 }
 
 static int appletb_fill_report_info(struct appletb_device *tb_dev,
@@ -962,6 +1049,345 @@ static int appletb_fill_report_info(struct appletb_device *tb_dev,
 	return 1;
 }
 
+static __s32 appletb_als_get_field_value(struct appletb_device *tb_dev,
+					 struct hid_field *field)
+{
+	hid_hw_request(tb_dev->als_dev, field->report, HID_REQ_GET_REPORT);
+	hid_hw_wait(tb_dev->als_dev);
+
+	return field->value[0];
+}
+
+static void appletb_als_set_field_value(struct appletb_device *tb_dev,
+					struct hid_field *field, __s32 value)
+{
+	hid_set_field(field, 0, value);
+	hid_hw_request(tb_dev->als_dev, field->report, HID_REQ_SET_REPORT);
+}
+
+static int appletb_als_get_config(struct appletb_device *tb_dev,
+				  unsigned int field_usage, __s32 *value)
+{
+	struct hid_field *field;
+
+	field = appletb_find_report_field(tb_dev->als_cfg_report, field_usage);
+	if (!field)
+		return -EINVAL;
+
+	*value = appletb_als_get_field_value(tb_dev, field);
+
+	return 0;
+}
+
+static int appletb_als_set_config(struct appletb_device *tb_dev,
+				  unsigned int field_usage, __s32 value)
+{
+	struct hid_field *field;
+
+	field = appletb_find_report_field(tb_dev->als_cfg_report, field_usage);
+	if (!field)
+		return -EINVAL;
+
+	appletb_als_set_field_value(tb_dev, field, value);
+
+	return 0;
+}
+
+static int appletb_als_enable_events(struct iio_trigger *trig, bool state)
+{
+	struct appletb_device *tb_dev = iio_trigger_get_drvdata(trig);
+	struct hid_field *field;
+	int value;
+
+	/* set the sensor's reporting state */
+	field = appletb_find_report_field(tb_dev->als_cfg_report,
+					  HID_USAGE_SENSOR_PROP_REPORT_STATE);
+	if (!field)
+		return -EINVAL;
+
+	value = appletb_get_field_value_for_usage(field,
+		state ? HID_USAGE_SENSOR_PROP_REPORTING_STATE_ALL_EVENTS_ENUM :
+			HID_USAGE_SENSOR_PROP_REPORTING_STATE_NO_EVENTS_ENUM);
+
+	appletb_als_set_field_value(tb_dev, field, value);
+
+	/* if the sensor was enabled, push an initial value */
+	if (state) {
+		value = appletb_als_get_field_value(tb_dev,
+						    tb_dev->als_illum_field);
+		appletb_push_new_als_value(tb_dev, value);
+	}
+
+	return 0;
+}
+
+static int appletb_als_read_raw(struct iio_dev *iio_dev,
+				struct iio_chan_spec const *chan,
+				int *val, int *val2, long mask)
+{
+	struct appletb_device *tb_dev =
+				*(struct appletb_device **)iio_priv(iio_dev);
+	__s32 value;
+	int rc;
+
+	*val = 0;
+	*val2 = 0;
+
+	switch (mask) {
+	case IIO_CHAN_INFO_RAW:
+	case IIO_CHAN_INFO_PROCESSED:
+		*val = appletb_als_get_field_value(tb_dev,
+						   tb_dev->als_illum_field);
+		return IIO_VAL_INT;
+
+	case IIO_CHAN_INFO_SAMP_FREQ:
+		rc = appletb_als_get_config(tb_dev,
+					HID_USAGE_SENSOR_PROP_REPORT_INTERVAL,
+					&value);
+		if (rc)
+			return rc;
+
+		/* interval is in ms; val is in HZ, val2 in µHZ */
+		value = 1000000000 / value;
+		*val = value / 1000000;
+		*val2 = value - (*val * 1000000);
+
+		return IIO_VAL_INT_PLUS_MICRO;
+
+	case IIO_CHAN_INFO_HYSTERESIS:
+		rc = appletb_als_get_config(tb_dev,
+			HID_USAGE_SENSOR_LIGHT_ILLUM |
+			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS,
+			val);
+		return rc ? rc : IIO_VAL_INT;
+
+	default:
+		return -EINVAL;
+	}
+}
+
+static int appletb_als_write_raw(struct iio_dev *iio_dev,
+				 struct iio_chan_spec const *chan,
+				 int val, int val2, long mask)
+{
+	struct appletb_device *tb_dev =
+				*(struct appletb_device **)iio_priv(iio_dev);
+	int rc;
+
+	switch (mask) {
+	case IIO_CHAN_INFO_SAMP_FREQ:
+		rc = appletb_als_set_config(tb_dev,
+				       HID_USAGE_SENSOR_PROP_REPORT_INTERVAL,
+				       1000000000 / (val * 1000000 + val2));
+		break;
+
+	case IIO_CHAN_INFO_HYSTERESIS:
+		rc = appletb_als_set_config(tb_dev,
+			HID_USAGE_SENSOR_LIGHT_ILLUM |
+			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS,
+			val);
+		break;
+
+	default:
+		rc = -EINVAL;
+	}
+
+	return rc;
+}
+
+static const struct iio_chan_spec appletb_als_channels[] = {
+	{
+		.type = IIO_INTENSITY,
+		.modified = 1,
+		.channel2 = IIO_MOD_LIGHT_BOTH,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED) |
+			BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SAMP_FREQ) |
+			BIT(IIO_CHAN_INFO_HYSTERESIS),
+		.scan_type = {
+			.sign = 'u',
+			.realbits = 32,
+			.storagebits = 32,
+		},
+		.scan_index = 0,
+	},
+	{
+		.type = IIO_LIGHT,
+		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED) |
+			BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SAMP_FREQ) |
+			BIT(IIO_CHAN_INFO_HYSTERESIS),
+		.scan_type = {
+			.sign = 'u',
+			.realbits = 32,
+			.storagebits = 32,
+		},
+		.scan_index = 1,
+	}
+};
+
+static const struct iio_trigger_ops appletb_als_trigger_ops = {
+	.set_trigger_state = &appletb_als_enable_events,
+};
+
+static const struct iio_info appletb_als_info = {
+	.read_raw = &appletb_als_read_raw,
+	.write_raw = &appletb_als_write_raw,
+};
+
+static void appletb_config_als_worker(struct work_struct *work)
+{
+	struct appletb_device *tb_dev =
+			container_of(work, struct appletb_device, als_work);
+	struct hid_field *field;
+	struct iio_dev *iio_dev;
+	struct iio_trigger *iio_trig;
+	__s32 val;
+	int rc;
+
+	/* get current state */
+	hid_hw_request(tb_dev->als_dev, tb_dev->als_cfg_report,
+		       HID_REQ_GET_REPORT);
+	hid_hw_wait(tb_dev->als_dev);
+
+	/* power on the sensor */
+	field = appletb_find_report_field(tb_dev->als_cfg_report,
+					  HID_USAGE_SENSOR_PROY_POWER_STATE);
+	val = appletb_get_field_value_for_usage(field,
+			HID_USAGE_SENSOR_PROP_POWER_STATE_D0_FULL_POWER_ENUM);
+	hid_set_field(field, 0, val);
+
+	/* report change events automatically */
+	field = appletb_find_report_field(tb_dev->als_cfg_report,
+					  HID_USAGE_SENSOR_PROP_REPORT_STATE);
+	val = appletb_get_field_value_for_usage(field,
+			HID_USAGE_SENSOR_PROP_REPORTING_STATE_ALL_EVENTS_ENUM);
+	hid_set_field(field, 0, val);
+
+	/* set initial change sensitivy */
+	field = appletb_find_report_field(tb_dev->als_cfg_report,
+			HID_USAGE_SENSOR_LIGHT_ILLUM |
+			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS);
+	hid_set_field(field, 0, APPLETB_ALS_DEF_CHANGE_SENS);
+
+	/* update sensor's config */
+	hid_hw_request(tb_dev->als_dev, tb_dev->als_cfg_report,
+		       HID_REQ_SET_REPORT);
+
+	/* create and register iio device */
+	iio_dev = devm_iio_device_alloc(&tb_dev->als_dev->dev, sizeof(tb_dev));
+	if (!iio_dev)
+		return;
+
+	*(struct appletb_device **)iio_priv(iio_dev) = tb_dev;
+
+	iio_dev->channels = kmemdup(appletb_als_channels,
+				    sizeof(appletb_als_channels), GFP_KERNEL);
+	if (!iio_dev->channels)
+		goto free_iio_dev;
+
+	iio_dev->num_channels = ARRAY_SIZE(appletb_als_channels);
+	iio_dev->dev.parent = &tb_dev->als_dev->dev;
+	iio_dev->info = &appletb_als_info;
+	iio_dev->name = "als";
+	iio_dev->modes = INDIO_DIRECT_MODE;
+
+	rc = iio_triggered_buffer_setup(iio_dev, &iio_pollfunc_store_time, NULL,
+					NULL);
+	if (rc) {
+		pr_err("failed to set up iio triggers: %d\n", rc);
+		goto free_iio_dev;
+	}
+
+	iio_trig = devm_iio_trigger_alloc(&tb_dev->als_dev->dev, "%s-dev%d",
+					  iio_dev->name, iio_dev->id);
+	if (!iio_trig)
+		goto free_iio_dev;
+
+	iio_trig->dev.parent = &tb_dev->als_dev->dev;
+	iio_trig->ops = &appletb_als_trigger_ops;
+	iio_trigger_set_drvdata(iio_trig, tb_dev);
+
+	rc = iio_trigger_register(iio_trig);
+	if (rc) {
+		pr_err("failed to register iio device: %d\n", rc);
+		goto free_iio_trig;
+	}
+
+	tb_dev->als_iio_trig = iio_trig;
+
+	rc = iio_device_register(iio_dev);
+	if (rc) {
+		pr_err("failed to register iio device: %d\n", rc);
+		goto unreg_iio_trig;
+	}
+
+	tb_dev->als_iio_dev = iio_dev;
+
+	/* start receiving events */
+	rc = hid_hw_open(tb_dev->als_dev);
+	if (rc) {
+		hid_err(tb_dev->als_dev, "failed to open hid: %d\n", rc);
+		goto unreg_iio_dev;
+	}
+
+	return;
+
+unreg_iio_dev:
+	iio_device_unregister(iio_dev);
+unreg_iio_trig:
+	iio_trigger_unregister(iio_trig);
+free_iio_trig:
+	devm_iio_trigger_free(&tb_dev->als_dev->dev, iio_trig);
+	tb_dev->als_iio_trig = NULL;
+free_iio_dev:
+	devm_iio_device_free(&tb_dev->als_dev->dev, iio_dev);
+	tb_dev->als_iio_dev = NULL;
+}
+
+static void appletb_config_als(struct appletb_device *tb_dev,
+			       struct hid_device *hdev)
+{
+	struct hid_field *state_field;
+	struct hid_field *illum_field;
+
+	/* find als fields and reports */
+	state_field = appletb_find_hid_field(hdev, HID_USAGE_SENSOR_ALS,
+					    HID_USAGE_SENSOR_PROP_REPORT_STATE);
+	illum_field = appletb_find_hid_field(hdev, HID_USAGE_SENSOR_ALS,
+					     HID_USAGE_SENSOR_LIGHT_ILLUM);
+	if (!state_field || !illum_field)
+		return;
+
+	pr_info("Found ambient light sensor\n");
+
+	tb_dev->als_dev = hdev;
+	tb_dev->als_cfg_report = state_field->report;
+	tb_dev->als_illum_field = illum_field;
+
+	/*
+	 * Need to do actual setup in separate worker because at this point
+	 * we're in a callback from hid_device_probe with the driver_input_lock
+	 * held and hence responses to control-requests won't get parsed.
+	 */
+	schedule_work(&tb_dev->als_work);
+}
+
+static void appletb_remove_als(struct appletb_device *tb_dev)
+{
+	cancel_work_sync(&tb_dev->als_work);
+
+	if (tb_dev->als_iio_dev) {
+		hid_hw_close(tb_dev->als_dev);
+		iio_device_unregister(tb_dev->als_iio_dev);
+		iio_trigger_unregister(tb_dev->als_iio_trig);
+	}
+
+	tb_dev->als_iio_dev = NULL;
+	tb_dev->als_iio_trig = NULL;
+	tb_dev->als_dev = NULL;
+}
+
 static struct appletb_report_info *appletb_get_report_info(
 						struct appletb_device *tb_dev,
 						struct hid_device *hdev)
@@ -1006,6 +1432,7 @@ struct appletb_device *appletb_alloc_device(void)
 	kref_init(&tb_dev->kref);
 	spin_lock_init(&tb_dev->tb_mode_lock);
 	INIT_DELAYED_WORK(&tb_dev->tb_mode_work, appletb_set_tb_mode_worker);
+	INIT_WORK(&tb_dev->als_work, appletb_config_als_worker);
 
 	/* get iBridge acpi power control method */
 	sts = acpi_get_devices(APPLETB_ACPI_ASOC_HID,
@@ -1160,6 +1587,9 @@ static int appletb_probe(struct hid_device *hdev,
 		}
 	}
 
+	/* set up ambient light sensor */
+	appletb_config_als(tb_dev, hdev);
+
 	/* done */
 	mutex_unlock(&appletb_dev_lock);
 
@@ -1194,6 +1624,9 @@ static void appletb_remove(struct hid_device *hdev)
 	struct appletb_report_info *report_info;
 
 	mutex_lock(&appletb_dev_lock);
+
+	if (tb_dev->als_dev == hdev)
+		appletb_remove_als(tb_dev);
 
 	hid_hw_stop(hdev);
 
@@ -1289,7 +1722,7 @@ static struct hid_driver appletb_driver = {
 	.id_table = appletb_touchbar_devices,
 	.probe = appletb_probe,
 	.remove = appletb_remove,
-	.event = appletb_tb_event,
+	.event = appletb_hid_event,
 	.input_configured = appletb_input_configured,
 #ifdef CONFIG_PM
 	.suspend = appletb_suspend,
