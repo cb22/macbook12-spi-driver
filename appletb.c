@@ -214,11 +214,9 @@ static int appletb_send_hid_report(struct appletb_report_info *rinfo,
 	int tries = 0;
 	int rc;
 
-	buffer = kmalloc(size, GFP_KERNEL);
+	buffer = kmemdup(data, size, GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
-
-	memcpy(buffer, data, size);
 
 	do {
 		rc = usb_control_msg(dev,
