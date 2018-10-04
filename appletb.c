@@ -186,9 +186,9 @@ struct appletb_device {
 	unsigned char		cur_tb_disp;
 	unsigned char		pnd_tb_disp;
 	bool			tb_autopm_off;
-	struct delayed_work	tb_mode_work;
-	/* protects the above mode flags */
-	spinlock_t		tb_mode_lock;
+	struct delayed_work	tb_work;
+	/* protects most of the above */
+	spinlock_t		tb_lock;
 
 	int			dim_timeout;
 	int			idle_timeout;
@@ -330,10 +330,10 @@ static bool appletb_any_tb_key_pressed(struct appletb_device *tb_dev)
 	return false;
 }
 
-static void appletb_set_tb_mode_worker(struct work_struct *work)
+static void appletb_set_tb_worker(struct work_struct *work)
 {
 	struct appletb_device *tb_dev =
-		container_of(work, struct appletb_device, tb_mode_work.work);
+		container_of(work, struct appletb_device, tb_work.work);
 	s64 time_left, min_timeout, time_to_off;
 	unsigned char pending_mode;
 	unsigned char pending_disp;
@@ -342,20 +342,20 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	int rc1 = 1, rc2 = 1;
 	unsigned long flags;
 
-	spin_lock_irqsave(&tb_dev->tb_mode_lock, flags);
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
 
 	/* handle explicit mode-change request */
 	pending_mode = tb_dev->pnd_tb_mode;
 	pending_disp = tb_dev->pnd_tb_disp;
 
-	spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 
 	if (pending_mode != APPLETB_CMD_MODE_NONE)
 		rc1 = appletb_set_tb_mode(tb_dev, pending_mode);
 	if (pending_disp != APPLETB_CMD_DISP_NONE)
 		rc2 = appletb_set_tb_disp(tb_dev, pending_disp);
 
-	spin_lock_irqsave(&tb_dev->tb_mode_lock, flags);
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
 
 	need_reschedule = false;
 
@@ -404,11 +404,11 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 
 	any_tb_key_pressed = appletb_any_tb_key_pressed(tb_dev);
 
-	spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 
 	/* a new command arrived while we were busy - handle it */
 	if (need_reschedule) {
-		schedule_delayed_work(&tb_dev->tb_mode_work, 0);
+		schedule_delayed_work(&tb_dev->tb_work, 0);
 		return;
 	}
 
@@ -419,11 +419,11 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 	/* manage idle/dim timeout */
 	if (time_left > 0) {
 		/* we fired too soon or had a mode-change- re-schedule */
-		schedule_delayed_work(&tb_dev->tb_mode_work,
+		schedule_delayed_work(&tb_dev->tb_work,
 				      msecs_to_jiffies(time_left * 1000));
 	} else if (any_tb_key_pressed) {
 		/* keys are still pressed - re-schedule */
-		schedule_delayed_work(&tb_dev->tb_mode_work,
+		schedule_delayed_work(&tb_dev->tb_work,
 				      msecs_to_jiffies(min_timeout * 1000));
 	} else {
 		/* dim or idle timeout reached */
@@ -431,13 +431,13 @@ static void appletb_set_tb_mode_worker(struct work_struct *work)
 						     APPLETB_CMD_DISP_DIM;
 		if (next_disp != current_disp &&
 		    appletb_set_tb_disp(tb_dev, next_disp) == 0) {
-			spin_lock_irqsave(&tb_dev->tb_mode_lock, flags);
+			spin_lock_irqsave(&tb_dev->tb_lock, flags);
 			tb_dev->cur_tb_disp = next_disp;
-			spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+			spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 		}
 
 		if (time_to_off > 0)
-			schedule_delayed_work(&tb_dev->tb_mode_work,
+			schedule_delayed_work(&tb_dev->tb_work,
 					msecs_to_jiffies(time_to_off * 1000));
 	}
 }
@@ -542,8 +542,8 @@ static void appletb_update_touchbar_no_lock(struct appletb_device *tb_dev,
 			     need_update, want_mode, tb_dev->cur_tb_mode,
 			     want_disp, tb_dev->cur_tb_disp);
 	if (need_update) {
-		cancel_delayed_work(&tb_dev->tb_mode_work);
-		schedule_delayed_work(&tb_dev->tb_mode_work, 0);
+		cancel_delayed_work(&tb_dev->tb_work);
+		schedule_delayed_work(&tb_dev->tb_work, 0);
 	}
 }
 
@@ -551,12 +551,12 @@ static void appletb_update_touchbar(struct appletb_device *tb_dev, bool force)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&tb_dev->tb_mode_lock, flags);
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
 
 	if (tb_dev->active)
 		appletb_update_touchbar_no_lock(tb_dev, force);
 
-	spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 }
 
 static void appletb_set_idle_timeout(struct appletb_device *tb_dev, int new)
@@ -694,7 +694,7 @@ static int appletb_hid_als_event(struct appletb_device *tb_dev,
 	unsigned long flags;
 	int rc = 0;
 
-	spin_lock_irqsave(&tb_dev->tb_mode_lock, flags);
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
 
 	if (tb_dev->active && tb_dev->als_iio_dev &&
 	    usage->hid == HID_USAGE_SENSOR_LIGHT_ILLUM) {
@@ -702,7 +702,7 @@ static int appletb_hid_als_event(struct appletb_device *tb_dev,
 		rc = 1;
 	}
 
-	spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 
 	return rc;
 }
@@ -729,10 +729,10 @@ static int appletb_hid_key_event(struct appletb_device *tb_dev,
 	if (slot < 0)
 		return 0;
 
-	spin_lock_irqsave(&tb_dev->tb_mode_lock, flags);
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
 
 	if (!tb_dev->active) {
-		spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+		spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 		return 0;
 	}
 
@@ -772,16 +772,16 @@ static int appletb_hid_key_event(struct appletb_device *tb_dev,
 		tb_dev->last_tb_keys_translated[slot] = false;
 	}
 
-	spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 
 	/*
 	 * Need to send these input events outside of the lock, as otherwise
 	 * we can run into the following deadlock:
 	 *            Task 1                         Task 2
 	 *     appletb_hid_event()            input_event()
-	 *       acquire tb_mode_lock           acquire dev->event_lock
+	 *       acquire tb_lock                acquire dev->event_lock
 	 *       input_event()                  appletb_inp_event()
-	 *         acquire dev->event_lock        acquire tb_mode_lock
+	 *         acquire dev->event_lock        acquire tb_lock
 	 */
 	if (send_dummy) {
 		input_event(field->hidinput->input, EV_KEY, KEY_UNKNOWN, 1);
@@ -812,10 +812,10 @@ static void appletb_inp_event(struct input_handle *handle, unsigned int type,
 	struct appletb_device *tb_dev = handle->private;
 	unsigned long flags;
 
-	spin_lock_irqsave(&tb_dev->tb_mode_lock, flags);
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
 
 	if (!tb_dev->active) {
-		spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+		spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 		return;
 	}
 
@@ -829,7 +829,7 @@ static void appletb_inp_event(struct input_handle *handle, unsigned int type,
 	/* only switch touchbar mode when no touchbar keys are pressed */
 	appletb_update_touchbar_no_lock(tb_dev, false);
 
-	spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 }
 
 /* Find and save the usb-device associated with the touchbar input device */
@@ -1403,9 +1403,9 @@ static void appletb_mark_active(struct appletb_device *tb_dev, bool active)
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&tb_dev->tb_mode_lock, flags);
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
 	tb_dev->active = active;
-	spin_unlock_irqrestore(&tb_dev->tb_mode_lock, flags);
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 }
 
 static acpi_status appletb_get_acpi_handle_cb(acpi_handle object,
@@ -1430,8 +1430,8 @@ struct appletb_device *appletb_alloc_device(void)
 
 	/* initialize structures */
 	kref_init(&tb_dev->kref);
-	spin_lock_init(&tb_dev->tb_mode_lock);
-	INIT_DELAYED_WORK(&tb_dev->tb_mode_work, appletb_set_tb_mode_worker);
+	spin_lock_init(&tb_dev->tb_lock);
+	INIT_DELAYED_WORK(&tb_dev->tb_work, appletb_set_tb_worker);
 	INIT_WORK(&tb_dev->als_work, appletb_config_als_worker);
 
 	/* get iBridge acpi power control method */
@@ -1600,7 +1600,7 @@ static int appletb_probe(struct hid_device *hdev,
 unreg_handler:
 	input_unregister_handler(&tb_dev->inp_handler);
 cancel_work:
-	cancel_delayed_work_sync(&tb_dev->tb_mode_work);
+	cancel_delayed_work_sync(&tb_dev->tb_work);
 	appletb_mark_active(tb_dev, false);
 	hid_hw_stop(hdev);
 free_iface:
@@ -1637,7 +1637,7 @@ static void appletb_remove(struct hid_device *hdev)
 
 		input_unregister_handler(&tb_dev->inp_handler);
 
-		cancel_delayed_work_sync(&tb_dev->tb_mode_work);
+		cancel_delayed_work_sync(&tb_dev->tb_work);
 		appletb_set_tb_mode(tb_dev, APPLETB_CMD_MODE_OFF);
 		appletb_set_tb_disp(tb_dev, APPLETB_CMD_DISP_ON);
 
