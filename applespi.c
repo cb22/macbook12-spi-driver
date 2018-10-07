@@ -1960,15 +1960,15 @@ static int applespi_resume(struct device *dev)
 	applespi->read_active = false;
 	applespi->write_active = false;
 
+	/* switch on the SPI interface */
+	applespi_enable_spi(applespi);
+
 	/* re-enable the interrupt */
 	status = acpi_enable_gpe(NULL, applespi->gpe);
 	if (ACPI_FAILURE(status)) {
 		pr_err("Failed to re-enable GPE handler for GPE %d: %s\n",
 		       applespi->gpe, acpi_format_exception(status));
 	}
-
-	/* switch on the SPI interface */
-	applespi_enable_spi(applespi);
 
 	/* switch the touchpad into multitouch mode */
 	applespi_init(applespi, true);
