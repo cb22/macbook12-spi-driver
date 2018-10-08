@@ -445,6 +445,7 @@ struct applespi_data {
 
 	struct led_classdev		backlight_info;
 
+	bool				suspended;
 	bool				drain;
 	wait_queue_head_t		drain_complete;
 	bool				read_active;
@@ -1642,12 +1643,15 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
-	sts = applespi_async(applespi, &applespi->rd_m,
-			     applespi_async_read_complete);
-	if (sts != 0)
-		pr_warn("Error queueing async read to device: %d\n", sts);
-	else
-		applespi->read_active = true;
+	if (!applespi->suspended) {
+		sts = applespi_async(applespi, &applespi->rd_m,
+				     applespi_async_read_complete);
+		if (sts != 0)
+			pr_warn("Error queueing async read to device: %d\n",
+				sts);
+		else
+			applespi->read_active = true;
+	}
 
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 
@@ -1829,6 +1833,8 @@ static int applespi_probe(struct spi_device *spi)
 		return -ENODEV;
 	}
 
+	applespi->suspended = false;
+
 	result = acpi_enable_gpe(NULL, applespi->gpe);
 	if (ACPI_FAILURE(result)) {
 		pr_err("Failed to enable GPE handler for GPE %d: %s\n",
@@ -1940,6 +1946,8 @@ static int applespi_suspend(struct device *dev)
 	wait_event_lock_irq(applespi->drain_complete, !applespi->read_active,
 			    applespi->cmd_msg_lock);
 
+	applespi->suspended = true;
+
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 
 	pr_info("spi-device suspend done.\n");
@@ -1951,14 +1959,21 @@ static int applespi_resume(struct device *dev)
 	struct spi_device *spi = to_spi_device(dev);
 	struct applespi_data *applespi = spi_get_drvdata(spi);
 	acpi_status status;
+	unsigned long flags;
 
 	/* ensure our flags and state reflect a newly resumed device */
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
 	applespi->drain = false;
 	applespi->have_cl_led_on = false;
 	applespi->have_bl_level = 0;
 	applespi->cmd_msg_queued = false;
 	applespi->read_active = false;
 	applespi->write_active = false;
+
+	applespi->suspended = false;
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 
 	/* switch on the SPI interface */
 	applespi_enable_spi(applespi);
