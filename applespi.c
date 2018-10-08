@@ -1923,6 +1923,12 @@ static int applespi_suspend(struct device *dev)
 	struct applespi_data *applespi = spi_get_drvdata(spi);
 	acpi_status status;
 	unsigned long flags;
+	int rc;
+
+	/* turn off caps-lock - it'll stay on otherwise */
+	rc = applespi_set_capsl_led(applespi, false);
+	if (rc)
+		pr_warn("Failed to turn off caps-lock led (%d)\n", rc);
 
 	/* wait for all outstanding writes to finish */
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
