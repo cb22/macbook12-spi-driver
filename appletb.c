@@ -977,8 +977,10 @@ static struct hid_field *appletb_find_hid_field(struct hid_device *hdev,
 		struct list_head *report_list =
 			    &hdev->report_enum[report_types[t]].report_list;
 		list_for_each_entry(report, report_list, list) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
 			if (report->application != application)
 				continue;
+#endif
 
 			field = appletb_find_report_field(report, field_usage);
 			if (field)
