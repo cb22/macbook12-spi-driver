@@ -204,7 +204,7 @@ struct appletb_device {
 };
 
 static struct appletb_device *appletb_dev;
-DEFINE_MUTEX(appletb_dev_lock);		/* protect appletb_dev */
+static DEFINE_MUTEX(appletb_dev_lock);		/* protect appletb_dev */
 
 struct appletb_key_translation {
 	u16 from;
@@ -1744,10 +1744,12 @@ module_hid_driver(appletb_driver);
  * trigger our driver instead.
  */
 
-static struct {
+static struct appletb_usb_hack_reg_data {
 	struct work_struct work;
 	struct hid_device  *hdev;
-} appletb_usb_hack_reg_data;
+} appletb_usb_hack_reg_data1, appletb_usb_hack_reg_data2;
+
+static DEFINE_MUTEX(appletb_usb_hack_reg_lock);	/* protect worker */
 
 static void appletb_usb_hack_release_hid_dev(struct hid_device *hdev)
 {
@@ -1764,11 +1766,15 @@ static void appletb_usb_hack_release_hid_dev(struct hid_device *hdev)
 
 static void appletb_usb_hack_reg_hid_driver(struct work_struct *work)
 {
+	struct appletb_usb_hack_reg_data *reg_data =
+		container_of(work, struct appletb_usb_hack_reg_data, work);
 	struct hid_device *hid;
 	int rc;
 
+	mutex_lock(&appletb_usb_hack_reg_lock);
+
 	/* check if a hid driver is attached */
-	hid = appletb_usb_hack_reg_data.hdev;
+	hid = reg_data->hdev;
 
 	if (!hid || !hid->driver) {
 		pr_debug("No hid driver attached to touchbar");
@@ -1797,6 +1803,8 @@ static void appletb_usb_hack_reg_hid_driver(struct work_struct *work)
 			pr_err("Error (re)registering touchbar hid driver (%d)",
 			       rc);
 	}
+
+	mutex_unlock(&appletb_usb_hack_reg_lock);
 
 	put_device(&hid->dev);
 }
@@ -1837,6 +1845,7 @@ static bool appletb_usb_hack_hid_match_id(struct hid_device *hdev,
 static int appletb_hid_bus_changed(struct notifier_block *nb,
 				   unsigned long action, void *data)
 {
+	struct appletb_usb_hack_reg_data *reg_data;
 	struct device *dev = data;
 	struct hid_device *hdev;
 	struct usb_interface *intf;
@@ -1849,16 +1858,22 @@ static int appletb_hid_bus_changed(struct notifier_block *nb,
 		return NOTIFY_DONE;
 
 	intf = to_usb_interface(hdev->dev.parent);
-	if (intf->cur_altsetting->desc.bInterfaceNumber != 2)
+	if (intf->cur_altsetting->desc.bInterfaceNumber != 2 &&
+	    intf->cur_altsetting->desc.bInterfaceNumber != 3)
 		return NOTIFY_DONE;
 
 	switch (action) {
 	case BUS_NOTIFY_ADD_DEVICE:
 		pr_info("Touchbar usb device added; dev=%s\n", dev_name(dev));
 
+		if (intf->cur_altsetting->desc.bInterfaceNumber == 2)
+			reg_data = &appletb_usb_hack_reg_data1;
+		else
+			reg_data = &appletb_usb_hack_reg_data2;
+
 		get_device(&hdev->dev);
-		appletb_usb_hack_reg_data.hdev = hdev;
-		schedule_work(&appletb_usb_hack_reg_data.work);
+		reg_data->hdev = hdev;
+		schedule_work(&reg_data->work);
 
 		return NOTIFY_OK;
 
@@ -1884,7 +1899,9 @@ static int __init appletb_init(void)
 	int ret;
 	struct bus_type *hid_bus;
 
-	INIT_WORK(&appletb_usb_hack_reg_data.work,
+	INIT_WORK(&appletb_usb_hack_reg_data1.work,
+		  appletb_usb_hack_reg_hid_driver);
+	INIT_WORK(&appletb_usb_hack_reg_data2.work,
 		  appletb_usb_hack_reg_hid_driver);
 
 	ret = hid_register_driver(&appletb_driver);
