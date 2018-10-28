@@ -1387,8 +1387,6 @@ static void applespi_got_data(struct applespi_data *applespi)
 		msg_len = len;
 	}
 
-	applespi->saved_msg_len = 0;
-
 	/* got complete message - verify */
 	if (!applespi_verify_crc(applespi, (u8 *)message, msg_len))
 		goto cleanup;
@@ -1439,6 +1437,8 @@ cleanup:
 	udelay(SPI_RW_CHG_DLY);
 
 	/* clean up */
+	applespi->saved_msg_len = 0;
+
 	applespi_msg_complete(applespi, packet->flags == PACKET_TYPE_WRITE,
 			      true);
 }
