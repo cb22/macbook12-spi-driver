@@ -1846,6 +1846,13 @@ static int applespi_probe(struct spi_device *spi)
 	/* trigger touchpad setup */
 	applespi_init(applespi, false);
 
+	/*
+	 * By default this device is not enable for wakeup; but USB keyboards
+	 * generally are, so the expectation is that by default the keyboard
+	 * will wake the system.
+	 */
+	device_wakeup_enable(&spi->dev);
+
 	/* set up keyboard-backlight */
 	result = applespi_get_saved_bl_level();
 	if (result >= 0)
