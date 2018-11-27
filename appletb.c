@@ -112,7 +112,8 @@
 
 #define APPLETB_MAX_DIM_TIME	30
 
-#define APPLETB_ALS_DEF_CHANGE_SENS	25
+#define APPLETB_ALS_DYN_SENS		0	/* our dynamic sensitivity */
+#define APPLETB_ALS_DEF_CHANGE_SENS	APPLETB_ALS_DYN_SENS
 
 static int appletb_tb_def_idle_timeout = 5 * 60;
 module_param_named(idle_timeout, appletb_tb_def_idle_timeout, int, 0444);
@@ -201,6 +202,8 @@ struct appletb_device {
 	struct iio_dev		*als_iio_dev;
 	struct iio_trigger	*als_iio_trig;
 	bool			als_events_enabled;
+	int			als_sensitivity;
+	int			als_hysteresis;
 };
 
 static struct appletb_device *appletb_dev;
@@ -225,6 +228,73 @@ static const struct appletb_key_translation appletb_fn_codes[] = {
 	{ KEY_F11, KEY_VOLUMEDOWN },
 	{ KEY_F12, KEY_VOLUMEUP },
 };
+
+/*
+ * This is a primitive way to get a relative sensitivity, one where we get
+ * notified when the value changes by a certain percentage rather than some
+ * absolute value. MacOS somehow manages to configure the sensor to work this
+ * way (with a 15% relative sensitivity), but I haven't been able to figure
+ * out how so far. So until we do, this provides a less-than-perfect
+ * simulation.
+ *
+ * When the brightness value is within one of the ranges, the sensitivity is
+ * set to that range's sensitivity. But order to reduce flapping when the
+ * brightness is right on the border between two ranges, the ranges overlap
+ * somewhat (by at least one sensitivity), and sensitivity is only changed if
+ * the value leaves the current sensitivity's range.
+ *
+ * The values chosen for the map are somewhat arbitrary: a compromise of not
+ * too many ranges (and hence changing the sensitivity) but not too small or
+ * large of a percentage of the min and max values in the range (currently
+ * from 7.5% to 30%, i.e. within a factor of 2 of 15%), as well as just plain
+ * "this feels reasonable to me".
+ */
+struct appletb_als_sensitivity_map {
+	int	sensitivity;
+	int	illum_low;
+	int	illum_high;
+};
+
+static struct appletb_als_sensitivity_map appletb_als_sensitivity_map[] = {
+	{   1,    0,   14 },
+	{   3,   10,   40 },
+	{   9,   30,  120 },
+	{  27,   90,  360 },
+	{  81,  270, 1080 },
+	{ 243,  810, 3240 },
+	{ 729, 2430, 9720 },
+};
+
+static int appletb_compute_als_sensitivity(int cur_val, int cur_sens)
+{
+	struct appletb_als_sensitivity_map *entry;
+	int i;
+
+	/* see if we're still in current range */
+	for (i = 0; i < ARRAY_SIZE(appletb_als_sensitivity_map); i++) {
+		entry = &appletb_als_sensitivity_map[i];
+
+		if (entry->sensitivity == cur_sens &&
+		    entry->illum_low <= cur_val &&
+		    entry->illum_high >= cur_val)
+			return cur_sens;
+		else if (entry->sensitivity > cur_sens)
+			break;
+	}
+
+	/* not in current range, so find new sensitivity */
+	for (i = 0; i < ARRAY_SIZE(appletb_als_sensitivity_map); i++) {
+		entry = &appletb_als_sensitivity_map[i];
+
+		if (entry->illum_low <= cur_val &&
+		    entry->illum_high >= cur_val)
+			return entry->sensitivity;
+	}
+
+	/* hmm, not in table, so assume we are above highest range */
+	i = ARRAY_SIZE(appletb_als_sensitivity_map) - 1;
+	return appletb_als_sensitivity_map[i].sensitivity;
+}
 
 static int appletb_send_hid_report(struct appletb_report_info *rinfo,
 				   __u8 requesttype, void *data, __u16 size)
@@ -679,12 +749,36 @@ static int appletb_tb_key_to_slot(unsigned int code)
 	}
 }
 
+static int appletb_als_set_config(struct appletb_device *tb_dev,
+				  unsigned int field_usage, __s32 value);
+
+static void appletb_update_dyn_als_sensitivity(struct appletb_device *tb_dev,
+					       __s32 value)
+{
+	int new_sens;
+	int rc;
+
+	new_sens = appletb_compute_als_sensitivity(value,
+						   tb_dev->als_sensitivity);
+	if (new_sens != tb_dev->als_sensitivity) {
+		rc = appletb_als_set_config(tb_dev,
+			HID_USAGE_SENSOR_LIGHT_ILLUM |
+			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS,
+			new_sens);
+		if (!rc)
+			tb_dev->als_sensitivity = new_sens;
+	}
+}
+
 static void appletb_push_new_als_value(struct appletb_device *tb_dev,
 				       __s32 value)
 {
 	__s32 buf[2] = { value, value };
 
 	iio_push_to_buffers(tb_dev->als_iio_dev, buf);
+
+	if (tb_dev->als_hysteresis == APPLETB_ALS_DYN_SENS)
+		appletb_update_dyn_als_sensitivity(tb_dev, value);
 }
 
 static int appletb_hid_als_event(struct appletb_device *tb_dev,
@@ -1158,10 +1252,19 @@ static int appletb_als_read_raw(struct iio_dev *iio_dev,
 		return IIO_VAL_INT_PLUS_MICRO;
 
 	case IIO_CHAN_INFO_HYSTERESIS:
+		if (tb_dev->als_hysteresis == APPLETB_ALS_DYN_SENS) {
+			*val = tb_dev->als_hysteresis;
+			return IIO_VAL_INT;
+		}
+
 		rc = appletb_als_get_config(tb_dev,
 			HID_USAGE_SENSOR_LIGHT_ILLUM |
 			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS,
 			val);
+		if (!rc) {
+			tb_dev->als_sensitivity = *val;
+			tb_dev->als_hysteresis = *val;
+		}
 		return rc ? rc : IIO_VAL_INT;
 
 	default:
@@ -1175,6 +1278,7 @@ static int appletb_als_write_raw(struct iio_dev *iio_dev,
 {
 	struct appletb_device *tb_dev =
 				*(struct appletb_device **)iio_priv(iio_dev);
+	__s32 illum;
 	int rc;
 
 	switch (mask) {
@@ -1185,10 +1289,26 @@ static int appletb_als_write_raw(struct iio_dev *iio_dev,
 		break;
 
 	case IIO_CHAN_INFO_HYSTERESIS:
+		if (val == APPLETB_ALS_DYN_SENS) {
+			if (tb_dev->als_hysteresis != APPLETB_ALS_DYN_SENS) {
+				tb_dev->als_hysteresis = val;
+				illum = appletb_als_get_field_value(tb_dev,
+						tb_dev->als_illum_field);
+				appletb_update_dyn_als_sensitivity(tb_dev,
+								   illum);
+			}
+			rc = 0;
+			break;
+		}
+
 		rc = appletb_als_set_config(tb_dev,
 			HID_USAGE_SENSOR_LIGHT_ILLUM |
 			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS,
 			val);
+		if (!rc) {
+			tb_dev->als_sensitivity = val;
+			tb_dev->als_hysteresis = val;
+		}
 		break;
 
 	default:
@@ -1239,7 +1359,7 @@ static const struct iio_info appletb_als_info = {
 };
 
 static void appletb_config_sensor(struct appletb_device *tb_dev,
-				  bool events_enabled)
+				  bool events_enabled, int sensitivity)
 {
 	struct hid_field *field;
 	__s32 val;
@@ -1268,11 +1388,16 @@ static void appletb_config_sensor(struct appletb_device *tb_dev,
 					 HID_USAGE_SENSOR_PROP_REPORT_INTERVAL);
 	hid_set_field(field, 0, field->logical_minimum);
 
-	/* set initial change sensitivy */
-	field = appletb_find_report_field(tb_dev->als_cfg_report,
+	/*
+	 * Set initial change sensitivity; if dynamic, enabling trigger will set
+	 * it instead.
+	 */
+	if (sensitivity != APPLETB_ALS_DYN_SENS) {
+		field = appletb_find_report_field(tb_dev->als_cfg_report,
 			HID_USAGE_SENSOR_LIGHT_ILLUM |
 			HID_USAGE_SENSOR_DATA_MOD_CHANGE_SENSITIVITY_ABS);
-	hid_set_field(field, 0, APPLETB_ALS_DEF_CHANGE_SENS);
+		hid_set_field(field, 0, sensitivity);
+	}
 
 	/* update sensor's config */
 	hid_hw_request(tb_dev->als_dev, tb_dev->als_cfg_report,
@@ -1392,7 +1517,9 @@ static int appletb_config_als(struct appletb_device *tb_dev,
 	tb_dev->als_cfg_report = state_field->report;
 	tb_dev->als_illum_field = illum_field;
 
-	appletb_config_sensor(tb_dev, false);
+	tb_dev->als_hysteresis = APPLETB_ALS_DEF_CHANGE_SENS;
+	tb_dev->als_sensitivity = APPLETB_ALS_DEF_CHANGE_SENS;
+	appletb_config_sensor(tb_dev, false, tb_dev->als_sensitivity);
 
 	return appletb_config_iio(tb_dev);
 }
@@ -1730,7 +1857,8 @@ static int appletb_reset_resume(struct hid_device *hdev)
 	tb_dev->last_event_time = ktime_get();
 
 	/* restore als state */
-	appletb_config_sensor(tb_dev, tb_dev->als_events_enabled);
+	appletb_config_sensor(tb_dev, tb_dev->als_events_enabled,
+			      tb_dev->als_sensitivity);
 
 	hid_info(hdev, "device resume done.\n");
 
