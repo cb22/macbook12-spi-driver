@@ -1,0 +1,856 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Apple iBridge Driver
+ *
+ * Copyright (c) 2018 Ronald Tschalär
+ */
+
+/**
+ * MacBookPro models with a touchbar (13,[23] and 14,[23]) have an Apple
+ * iBridge chip which exposes the touchbar, built-in webcam (iSight), and
+ * ambient light sensor. It shows up in the system as a USB device with 3
+ * configurations: 'Default iBridge Interfaces', 'Default iBridge
+ * Interfaces(OS X)', and 'Default iBridge Interfaces(Recovery)'. While
+ * the second one is used by MacOS to provide the fancy touchbar
+ * functionality with custom buttons etc, this driver just uses the first.
+ *
+ * In the first (default after boot) configuration, 4 usb interfaces are
+ * exposed: 2 related to the webcam, and 2 USB HID interfaces representing
+ * the touchbar and the ambient light sensor. The webcam interfaces are
+ * already handled by the uvcvideo driver; furthermore, the handling of
+ * the input reports when "keys" on the touchbar are pressed is already
+ * handled properly by the generic USB HID core. This leaves the
+ * management of the touchbar modes (e.g. switching between function and
+ * special keys when the FN key is pressed), the touchbar display (dimming
+ * and turning off), the key-remapping when the FN key is pressed, and
+ * handling of the light sensor.
+ *
+ * This driver is implemented as an MFD driver, with the touchbar and ALS
+ * functions implemented by appropriate subdrivers (mfd cells). Because
+ * both those are basically hid drivers, but the current kernel driver
+ * structure does not allow more than one driver per device, this driver
+ * implements a demuxer for hid drivers: it registers itself as a hid
+ * driver with the core, and in turn it lets the subdrivers register
+ * themselves as hid drivers with this driver; the callbacks from the core
+ * are then forwarded to the subdrivers.
+ *
+ * Lastly, this driver also takes care of the power-management for the
+ * iBridge when suspending and resuming.
+ */
+
+#define pr_fmt(fmt) "apple-ibridge: " fmt
+
+#include <linux/module.h>
+#include <linux/hid.h>
+#include <linux/device.h>
+#include <linux/mutex.h>
+#include <linux/list.h>
+#include <linux/srcu.h>
+#include <linux/rculist.h>
+#include <linux/slab.h>
+#include <linux/acpi.h>
+#include <linux/usb.h>
+#include <linux/mfd/core.h>
+#include <linux/version.h>
+#include "apple-ibridge.h"
+
+#ifdef UPSTREAM
+#include "usbhid/usbhid.h"
+#else
+#define	hid_to_usb_dev(hid_dev) \
+	to_usb_device((hid_dev)->dev.parent->parent)
+#endif
+
+#define USB_ID_VENDOR_APPLE	0x05ac
+#define USB_ID_PRODUCT_IBRIDGE	0x8600
+
+#define APPLETB_BASIC_CONFIG	1
+
+struct appleib_device {
+	acpi_handle		asoc_socw;
+	struct list_head	hid_drivers;
+	struct list_head	hid_devices;
+	struct mfd_cell		*subdevs;
+	struct mutex		update_lock; /* protect updates to all lists */
+	struct srcu_struct	lists_srcu;
+	bool			in_hid_probe;
+};
+
+struct appleib_hid_drv_info {
+	struct list_head	entry;
+	struct hid_driver	*driver;
+	void			*driver_data;
+};
+
+struct appleib_hid_dev_info {
+	struct list_head		entry;
+	struct list_head		drivers;
+	struct hid_device		*device;
+	const struct hid_device_id	*device_id;
+	bool				started;
+};
+
+static const struct mfd_cell appleib_subdevs[] = {
+	{ .name = PLAT_NAME_IB_TB },
+	{ .name = PLAT_NAME_IB_ALS },
+};
+
+static struct appleib_device *appleib_dev;
+
+#define	call_driver_func(drv_info, fn, hdev, ...) \
+	do { \
+		if ((drv_info)->driver->fn) \
+			(drv_info)->driver->fn(hdev, ##__VA_ARGS__); \
+	} while (0)
+
+#define	call_driver_func_ret(drv_info, fn, rc, hdev, ...) \
+	do { \
+		if ((drv_info)->driver->fn) \
+			rc = (drv_info)->driver->fn(hdev, ##__VA_ARGS__); \
+	} while (0)
+
+static void appleib_remove_driver(struct appleib_device *ib_dev,
+				  struct appleib_hid_drv_info *drv_info,
+				  struct appleib_hid_dev_info *dev_info)
+{
+	list_del_rcu(&drv_info->entry);
+	synchronize_srcu(&ib_dev->lists_srcu);
+
+	call_driver_func(drv_info, remove, dev_info->device);
+	kfree(drv_info);
+}
+
+static int appleib_probe_driver(struct appleib_hid_drv_info *drv_info,
+				struct appleib_hid_dev_info *dev_info)
+{
+	struct appleib_hid_drv_info *d;
+	int rc = 0;
+
+	call_driver_func_ret(drv_info, probe, rc, dev_info->device,
+			     dev_info->device_id);
+	if (rc)
+		return rc;
+
+	d = kmemdup(drv_info, sizeof(*drv_info), GFP_KERNEL);
+	if (!d) {
+		call_driver_func(drv_info, remove, dev_info->device);
+		return -ENOMEM;
+	}
+
+	list_add_tail_rcu(&d->entry, &dev_info->drivers);
+	return 0;
+}
+
+static void appleib_remove_driver_attachments(struct appleib_device *ib_dev,
+					struct appleib_hid_dev_info *dev_info,
+					struct hid_driver *driver)
+{
+	struct appleib_hid_drv_info *drv_info;
+	struct appleib_hid_drv_info *tmp;
+
+	list_for_each_entry_safe(drv_info, tmp, &dev_info->drivers, entry) {
+		if (!driver || drv_info->driver == driver)
+			appleib_remove_driver(ib_dev, drv_info, dev_info);
+	}
+}
+
+/*
+ * Find all devices that are attached to this driver and detach them.
+ *
+ * Note: this must be run with update_lock held.
+ */
+static void appleib_detach_devices(struct appleib_device *ib_dev,
+				   struct hid_driver *driver)
+{
+	struct appleib_hid_dev_info *dev_info;
+
+	list_for_each_entry(dev_info, &ib_dev->hid_devices, entry)
+		appleib_remove_driver_attachments(ib_dev, dev_info, driver);
+}
+
+/*
+ * Find all drivers that are attached to this device and detach them.
+ *
+ * Note: this must be run with update_lock held.
+ */
+static void appleib_detach_drivers(struct appleib_device *ib_dev,
+				   struct appleib_hid_dev_info *dev_info)
+{
+	appleib_remove_driver_attachments(ib_dev, dev_info, NULL);
+}
+
+/*
+ * Unregister a previously registered HID driver from us.
+ * @ib_dev: the appleib_device from which to unregister the driver
+ * @driver: the driver to unregister
+ */
+int appleib_unregister_hid_driver(struct appleib_device *ib_dev,
+				  struct hid_driver *driver)
+{
+	struct appleib_hid_drv_info *drv_info;
+
+	mutex_lock(&ib_dev->update_lock);
+
+	list_for_each_entry(drv_info, &ib_dev->hid_drivers, entry) {
+		if (drv_info->driver == driver) {
+			appleib_detach_devices(ib_dev, driver);
+			list_del_rcu(&drv_info->entry);
+			mutex_unlock(&ib_dev->update_lock);
+			synchronize_srcu(&ib_dev->lists_srcu);
+			kfree(drv_info);
+			pr_info("unregistered driver '%s'\n", driver->name);
+			return 0;
+		}
+	}
+
+	mutex_unlock(&ib_dev->update_lock);
+
+	return -ENOENT;
+}
+EXPORT_SYMBOL_GPL(appleib_unregister_hid_driver);
+
+static int appleib_start_hid_events(struct appleib_hid_dev_info *dev_info)
+{
+	struct hid_device *hdev = dev_info->device;
+	int rc;
+
+	rc = hid_connect(hdev, HID_CONNECT_DEFAULT);
+	if (rc) {
+		hid_err(hdev, "ib: hid connect failed (%d)\n", rc);
+		return rc;
+	}
+
+	rc = hid_hw_open(hdev);
+	if (rc) {
+		hid_err(hdev, "ib: failed to open hid: %d\n", rc);
+		hid_disconnect(hdev);
+	}
+
+	if (!rc)
+		dev_info->started = true;
+
+	return rc;
+}
+
+static void appleib_stop_hid_events(struct appleib_hid_dev_info *dev_info)
+{
+	if (dev_info->started) {
+		hid_hw_close(dev_info->device);
+		hid_disconnect(dev_info->device);
+		dev_info->started = false;
+	}
+}
+
+/*
+ * Register a HID driver with us.
+ * @ib_dev: the appleib_device with which to register the driver
+ * @driver: the driver to register
+ * @data: the driver-data to associate with the driver; this is available
+ *        from appleib_get_drvdata(...).
+ */
+int appleib_register_hid_driver(struct appleib_device *ib_dev,
+				struct hid_driver *driver, void *data)
+{
+	struct appleib_hid_drv_info *drv_info;
+	struct appleib_hid_dev_info *dev_info;
+	int rc;
+
+	if (!driver->probe)
+		return -EINVAL;
+
+	drv_info = kzalloc(sizeof(*drv_info), GFP_KERNEL);
+	if (!drv_info)
+		return -ENOMEM;
+
+	drv_info->driver = driver;
+	drv_info->driver_data = data;
+
+	mutex_lock(&ib_dev->update_lock);
+
+	list_add_tail_rcu(&drv_info->entry, &ib_dev->hid_drivers);
+
+	list_for_each_entry(dev_info, &ib_dev->hid_devices, entry) {
+		appleib_stop_hid_events(dev_info);
+
+		appleib_probe_driver(drv_info, dev_info);
+
+		rc = appleib_start_hid_events(dev_info);
+		if (rc)
+			appleib_detach_drivers(ib_dev, dev_info);
+	}
+
+	mutex_unlock(&ib_dev->update_lock);
+
+	pr_info("registered driver '%s'\n", driver->name);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(appleib_register_hid_driver);
+
+/*
+ * Get the driver-specific data associated with the given, previously
+ * registered HID driver (provided in the appleib_register_hid_driver()
+ * call).
+ * @ib_dev: the appleib_device with which the driver was registered
+ * @driver: the driver for which to get the data
+ */
+void *appleib_get_drvdata(struct appleib_device *ib_dev,
+			  struct hid_driver *driver)
+{
+	struct appleib_hid_drv_info *drv_info;
+	void *drv_data = NULL;
+	int idx;
+
+	idx = srcu_read_lock(&ib_dev->lists_srcu);
+
+	list_for_each_entry_rcu(drv_info, &ib_dev->hid_drivers, entry) {
+		if (drv_info->driver == driver) {
+			drv_data = drv_info->driver_data;
+			break;
+		}
+	}
+
+	srcu_read_unlock(&ib_dev->lists_srcu, idx);
+
+	return drv_data;
+}
+EXPORT_SYMBOL_GPL(appleib_get_drvdata);
+
+/*
+ * Forward a hid-driver callback to all registered sub-drivers. This is for
+ * callbacks that return a status as an int.
+ * @hdev the hid-device
+ * @forward a function that calls the callback on the given driver
+ * @args arguments for the forward function
+ */
+static int appleib_forward_int_op(struct hid_device *hdev,
+				  int (*forward)(struct appleib_hid_drv_info *,
+						 struct hid_device *, void *),
+				  void *args)
+{
+	struct appleib_device *ib_dev = hid_get_drvdata(hdev);
+	struct appleib_hid_dev_info *dev_info;
+	struct appleib_hid_drv_info *drv_info;
+	int idx;
+	int rc = 0;
+
+	idx = srcu_read_lock(&ib_dev->lists_srcu);
+
+	list_for_each_entry_rcu(dev_info, &ib_dev->hid_devices, entry) {
+		if (dev_info->device != hdev)
+			continue;
+
+		list_for_each_entry_rcu(drv_info, &dev_info->drivers, entry) {
+			rc = forward(drv_info, hdev, args);
+			if (rc)
+				break;
+		}
+
+		break;
+	}
+
+	srcu_read_unlock(&ib_dev->lists_srcu, idx);
+
+	return rc;
+}
+
+struct appleib_hid_event_args {
+	struct hid_field *field;
+	struct hid_usage *usage;
+	__s32 value;
+};
+
+static int appleib_hid_event_fwd(struct appleib_hid_drv_info *drv_info,
+				 struct hid_device *hdev, void *args)
+{
+	struct appleib_hid_event_args *evt_args = args;
+	int rc = 0;
+
+	call_driver_func_ret(drv_info, event, rc, hdev, evt_args->field,
+			     evt_args->usage, evt_args->value);
+	return rc;
+}
+
+static int appleib_hid_event(struct hid_device *hdev, struct hid_field *field,
+			     struct hid_usage *usage, __s32 value)
+{
+	struct appleib_hid_event_args args = {
+		.field = field,
+		.usage = usage,
+		.value = value,
+	};
+
+	return appleib_forward_int_op(hdev, appleib_hid_event_fwd, &args);
+}
+
+static int appleib_input_configured_fwd(struct appleib_hid_drv_info *drv_info,
+					struct hid_device *hdev, void *args)
+{
+	int rc = 0;
+
+	call_driver_func_ret(drv_info, input_configured, rc, hdev,
+			     (struct hid_input *)args);
+	return rc;
+}
+
+static int appleib_input_configured(struct hid_device *hdev,
+				    struct hid_input *hidinput)
+{
+	return appleib_forward_int_op(hdev, appleib_input_configured_fwd,
+				      hidinput);
+}
+
+#ifdef CONFIG_PM
+static int appleib_hid_suspend_fwd(struct appleib_hid_drv_info *drv_info,
+				   struct hid_device *hdev, void *args)
+{
+	int rc = 0;
+
+	call_driver_func_ret(drv_info, suspend, rc, hdev,
+			     *(pm_message_t *)args);
+	return rc;
+}
+
+static int appleib_hid_suspend(struct hid_device *hdev, pm_message_t message)
+{
+	return appleib_forward_int_op(hdev, appleib_hid_suspend_fwd, &message);
+}
+
+static int appleib_hid_resume_fwd(struct appleib_hid_drv_info *drv_info,
+				  struct hid_device *hdev, void *args)
+{
+	int rc = 0;
+
+	call_driver_func_ret(drv_info, resume, rc, hdev);
+	return rc;
+}
+
+static int appleib_hid_resume(struct hid_device *hdev)
+{
+	return appleib_forward_int_op(hdev, appleib_hid_resume_fwd, NULL);
+}
+
+static int appleib_hid_reset_resume_fwd(struct appleib_hid_drv_info *drv_info,
+					struct hid_device *hdev, void *args)
+{
+	int rc = 0;
+
+	call_driver_func_ret(drv_info, reset_resume, rc, hdev);
+	return rc;
+}
+
+static int appleib_hid_reset_resume(struct hid_device *hdev)
+{
+	return appleib_forward_int_op(hdev, appleib_hid_reset_resume_fwd, NULL);
+}
+#endif /* CONFIG_PM */
+
+/*
+ * Find the field in the report with the given usage.
+ * @report: the report to search
+ * @field_usage: the usage of the field to search for
+ */
+struct hid_field *appleib_find_report_field(struct hid_report *report,
+					    unsigned int field_usage)
+{
+	int f, u;
+
+	for (f = 0; f < report->maxfield; f++) {
+		struct hid_field *field = report->field[f];
+
+		if (field->logical == field_usage)
+			return field;
+
+		for (u = 0; u < field->maxusage; u++) {
+			if (field->usage[u].hid == field_usage)
+				return field;
+		}
+	}
+
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(appleib_find_report_field);
+
+/*
+ * Search all the reports of the device for the field with the given usage.
+ * @hdev: the device whose reports to search
+ * @application: the usage of application collection that the field must
+ *               belong to
+ * @field_usage: the usage of the field to search for
+ */
+struct hid_field *appleib_find_hid_field(struct hid_device *hdev,
+					 unsigned int application,
+					 unsigned int field_usage)
+{
+	static const int report_types[] = { HID_INPUT_REPORT, HID_OUTPUT_REPORT,
+					    HID_FEATURE_REPORT };
+	struct hid_report *report;
+	struct hid_field *field;
+	int t;
+
+	for (t = 0; t < ARRAY_SIZE(report_types); t++) {
+		struct list_head *report_list =
+			    &hdev->report_enum[report_types[t]].report_list;
+		list_for_each_entry(report, report_list, list) {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+			if (report->application != application)
+				continue;
+#endif
+
+			field = appleib_find_report_field(report, field_usage);
+			if (field)
+				return field;
+		}
+	}
+
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(appleib_find_hid_field);
+
+/*
+ * Return whether we're current inside a hid_device_probe or not.
+ * @ib_dev: the appleib_device
+ */
+bool appleib_in_hid_probe(struct appleib_device *ib_dev)
+{
+	return ib_dev->in_hid_probe;
+}
+EXPORT_SYMBOL_GPL(appleib_in_hid_probe);
+
+static struct appleib_hid_dev_info *appleib_add_device(
+						struct appleib_device *ib_dev,
+						struct hid_device *hdev,
+						const struct hid_device_id *id)
+{
+	struct appleib_hid_dev_info *dev_info;
+	struct appleib_hid_drv_info *drv_info;
+
+	/* allocate device-info for this device */
+	dev_info = kzalloc(sizeof(*dev_info), GFP_KERNEL);
+	if (!dev_info)
+		return NULL;
+
+	INIT_LIST_HEAD(&dev_info->drivers);
+	dev_info->device = hdev;
+	dev_info->device_id = id;
+
+	/* notify all our sub drivers */
+	mutex_lock(&ib_dev->update_lock);
+
+	ib_dev->in_hid_probe = true;
+
+	list_for_each_entry(drv_info, &ib_dev->hid_drivers, entry) {
+		appleib_probe_driver(drv_info, dev_info);
+	}
+
+	ib_dev->in_hid_probe = false;
+
+	/* remember this new device */
+	list_add_tail_rcu(&dev_info->entry, &ib_dev->hid_devices);
+
+	mutex_unlock(&ib_dev->update_lock);
+
+	return dev_info;
+}
+
+static void appleib_remove_device(struct appleib_device *ib_dev,
+				  struct appleib_hid_dev_info *dev_info)
+{
+	list_del_rcu(&dev_info->entry);
+	synchronize_srcu(&ib_dev->lists_srcu);
+
+	appleib_detach_drivers(ib_dev, dev_info);
+
+	kfree(dev_info);
+}
+
+static int appleib_hid_probe(struct hid_device *hdev,
+			     const struct hid_device_id *id)
+{
+	struct appleib_device *ib_dev;
+	struct appleib_hid_dev_info *dev_info;
+	struct usb_device *udev;
+	int rc;
+
+	/* check usb config first */
+	udev = hid_to_usb_dev(hdev);
+
+	if (udev->actconfig->desc.bConfigurationValue != APPLETB_BASIC_CONFIG) {
+		rc = usb_driver_set_configuration(udev, APPLETB_BASIC_CONFIG);
+		return rc ? rc : -ENODEV;
+	}
+
+	/* Assign the driver data */
+	ib_dev = appleib_dev;
+	hid_set_drvdata(hdev, ib_dev);
+
+	/* initialize the report info */
+	rc = hid_parse(hdev);
+	if (rc) {
+		hid_err(hdev, "ib: hid parse failed (%d)\n", rc);
+		goto error;
+	}
+
+	/* alloc bufs etc so probe's can send requests; but connect later */
+	rc = hid_hw_start(hdev, 0);
+	if (rc) {
+		hid_err(hdev, "ib: hw start failed (%d)\n", rc);
+		goto error;
+	}
+
+	/* add this hdev to our device list */
+	dev_info = appleib_add_device(ib_dev, hdev, id);
+	if (!dev_info) {
+		rc = -ENOMEM;
+		goto stop_hw;
+	}
+
+	/* start the hid */
+	rc = appleib_start_hid_events(dev_info);
+	if (rc)
+		goto remove_dev;
+
+	/* done */
+	hid_info(hdev, "ib: device probe done.\n");
+
+	return 0;
+
+remove_dev:
+	mutex_lock(&ib_dev->update_lock);
+	appleib_remove_device(ib_dev, dev_info);
+	mutex_unlock(&ib_dev->update_lock);
+stop_hw:
+	hid_hw_stop(hdev);
+error:
+	return rc;
+}
+
+static void appleib_hid_remove(struct hid_device *hdev)
+{
+	struct appleib_device *ib_dev = hid_get_drvdata(hdev);
+	struct appleib_hid_dev_info *dev_info;
+
+	mutex_lock(&ib_dev->update_lock);
+
+	list_for_each_entry(dev_info, &ib_dev->hid_devices, entry) {
+		if (dev_info->device == hdev) {
+			appleib_stop_hid_events(dev_info);
+			appleib_remove_device(ib_dev, dev_info);
+			break;
+		}
+	}
+
+	mutex_unlock(&ib_dev->update_lock);
+
+	hid_hw_stop(hdev);
+
+	hid_info(hdev, "ib: device remove done.\n");
+}
+
+static const struct hid_device_id appleib_hid_devices[] = {
+	{ HID_USB_DEVICE(USB_ID_VENDOR_APPLE, USB_ID_PRODUCT_IBRIDGE) },
+	{ },
+};
+
+static struct hid_driver appleib_hid_driver = {
+	.name = "apple-ibridge-hid",
+	.id_table = appleib_hid_devices,
+	.probe = appleib_hid_probe,
+	.remove = appleib_hid_remove,
+	.event = appleib_hid_event,
+	.input_configured = appleib_input_configured,
+#ifdef CONFIG_PM
+	.suspend = appleib_hid_suspend,
+	.resume = appleib_hid_resume,
+	.reset_resume = appleib_hid_reset_resume,
+#endif
+};
+
+static struct appleib_device *appleib_alloc_device(acpi_handle asoc_handle)
+{
+	struct appleib_device *ib_dev;
+	acpi_status sts;
+	int rc;
+
+	/* allocate */
+	ib_dev = kzalloc(sizeof(*ib_dev), GFP_KERNEL);
+	if (!ib_dev)
+		return ERR_PTR(-ENOMEM);
+
+	/* init structures */
+	INIT_LIST_HEAD(&ib_dev->hid_drivers);
+	INIT_LIST_HEAD(&ib_dev->hid_devices);
+	mutex_init(&ib_dev->update_lock);
+	init_srcu_struct(&ib_dev->lists_srcu);
+
+	/* get iBridge acpi power control method */
+	sts = acpi_get_handle(asoc_handle, "SOCW", &ib_dev->asoc_socw);
+	if (ACPI_FAILURE(sts)) {
+		pr_err("Error getting handle for ASOC.SOCW method: %s\n",
+		       acpi_format_exception(sts));
+		rc = -ENXIO;
+		goto free_mem;
+	}
+
+	/* ensure iBridge is powered on */
+	sts = acpi_execute_simple_method(ib_dev->asoc_socw, NULL, 1);
+	if (ACPI_FAILURE(sts))
+		pr_warn("SOCW(1) failed: %s\n", acpi_format_exception(sts));
+
+	return ib_dev;
+
+free_mem:
+	kfree(ib_dev);
+	return ERR_PTR(rc);
+}
+
+static int appleib_probe(struct acpi_device *acpi)
+{
+	struct appleib_device *ib_dev;
+	struct appleib_platform_data *pdata;
+	int i;
+	int ret;
+
+	if (appleib_dev)
+		return -EBUSY;
+
+	ib_dev = appleib_alloc_device(acpi->handle);
+	if (IS_ERR_OR_NULL(ib_dev))
+		return PTR_ERR(ib_dev);
+
+	ib_dev->subdevs = kmemdup(appleib_subdevs, sizeof(appleib_subdevs),
+				  GFP_KERNEL);
+	if (!ib_dev->subdevs) {
+		ret = -ENOMEM;
+		goto free_dev;
+	}
+
+	pdata = kzalloc(sizeof(*pdata), GFP_KERNEL);
+	if (!pdata) {
+		ret = -ENOMEM;
+		goto free_subdevs;
+	}
+
+	pdata->ib_dev = ib_dev;
+	for (i = 0; i < ARRAY_SIZE(appleib_subdevs); i++) {
+		ib_dev->subdevs[i].platform_data = pdata;
+		ib_dev->subdevs[i].pdata_size = sizeof(*pdata);
+	}
+
+	ret = mfd_add_devices(&acpi->dev, PLATFORM_DEVID_NONE,
+			      ib_dev->subdevs, ARRAY_SIZE(appleib_subdevs),
+			      NULL, 0, NULL);
+	if (ret) {
+		pr_err("Error adding MFD devices: %d\n", ret);
+		goto free_pdata;
+	}
+
+	acpi->driver_data = ib_dev;
+	appleib_dev = ib_dev;
+
+	ret = hid_register_driver(&appleib_hid_driver);
+	if (ret) {
+		pr_err("Error registering hid driver: %d\n", ret);
+		goto rem_mfd_devs;
+	}
+
+	return 0;
+
+rem_mfd_devs:
+	mfd_remove_devices(&acpi->dev);
+free_pdata:
+	kfree(pdata);
+free_subdevs:
+	kfree(ib_dev->subdevs);
+free_dev:
+	appleib_dev = NULL;
+	acpi->driver_data = NULL;
+	kfree(ib_dev);
+	return ret;
+}
+
+static int appleib_remove(struct acpi_device *acpi)
+{
+	struct appleib_device *ib_dev = acpi_driver_data(acpi);
+
+	mfd_remove_devices(&acpi->dev);
+	hid_unregister_driver(&appleib_hid_driver);
+
+	if (appleib_dev == ib_dev)
+		appleib_dev = NULL;
+
+	kfree(ib_dev->subdevs[0].platform_data);
+	kfree(ib_dev->subdevs);
+	kfree(ib_dev);
+
+	return 0;
+}
+
+static int appleib_suspend(struct device *dev)
+{
+	struct acpi_device *adev;
+	struct appleib_device *ib_dev;
+	int rc;
+
+	adev = to_acpi_device(dev);
+	ib_dev = acpi_driver_data(adev);
+
+	rc = acpi_execute_simple_method(ib_dev->asoc_socw, NULL, 0);
+	if (ACPI_FAILURE(rc))
+		pr_warn("SOCW(0) failed: %s\n", acpi_format_exception(rc));
+
+	pr_info("device suspend done.\n");
+
+	return 0;
+}
+
+static int appleib_resume(struct device *dev)
+{
+	struct acpi_device *adev;
+	struct appleib_device *ib_dev;
+	int rc;
+
+	adev = to_acpi_device(dev);
+	ib_dev = acpi_driver_data(adev);
+
+	rc = acpi_execute_simple_method(ib_dev->asoc_socw, NULL, 1);
+	if (ACPI_FAILURE(rc))
+		pr_warn("SOCW(1) failed: %s\n", acpi_format_exception(rc));
+
+	pr_info("device resume done.\n");
+
+	return 0;
+}
+
+static const struct dev_pm_ops appleib_pm = {
+	.suspend = appleib_suspend,
+	.resume = appleib_resume,
+	.restore = appleib_resume,
+};
+
+static const struct acpi_device_id appleib_acpi_match[] = {
+	{ "APP7777", 0 },
+	{ },
+};
+
+MODULE_DEVICE_TABLE(acpi, appleib_acpi_match);
+
+static struct acpi_driver appleib_driver = {
+	.name		= "apple-ibridge",
+	.class		= "topcase", /* ? */
+	.owner		= THIS_MODULE,
+	.ids		= appleib_acpi_match,
+	.ops		= {
+		.add		= appleib_probe,
+		.remove		= appleib_remove,
+	},
+	.drv		= {
+		.pm		= &appleib_pm,
+	},
+};
+
+module_acpi_driver(appleib_driver)
+
+MODULE_AUTHOR("Ronald Tschalär");
+MODULE_DESCRIPTION("Apple iBridge driver");
+MODULE_LICENSE("GPL");

@@ -1,4 +1,8 @@
-Very simple, work in progress input driver for the SPI keyboard / trackpad found on 12" MacBooks (2015 and later) and newer MacBook Pros (late 2016 and later), as well a simple touchbar driver for 2016 MacBook Pro's.
+Very simple, work in progress input driver for the SPI keyboard / trackpad found on 12" MacBooks (2015 and later) and newer MacBook Pros (late 2016 and later), as well a simple touchbar and ambient-light-sensor driver for 2016 MacBook Pro's.
+
+NOTE:
+-----
+The touchbar driver was recently refactored; if you're upgrading from the `appletb` driver, please see the [Upgrading](#upgrading) section; if you're running a kernel before 4.16 then please check out the [legacy](../../tree/touchbar-driver-monolithic) branch instead.
 
 Using it:
 ---------
@@ -67,11 +71,17 @@ Some useful values are (since the value is a bitmask, these can be combined):
 * 0x1     - turn on logging of touchpad initialization packets
 * 0x6     - turn on logging of backlight and caps-lock-led packets
 
-Touchbar:
----------
-The touchbar driver is called `appletb`. It provides basic touchbar functionality (enabling the touchbar and switching between modes based on the FN key) as well as providing access to the ambient light sensor. If loading manually (i.e. via `insmod`), you need to first load the `industrialio_triggered_buffer` module.
+Touchbar/ALS/iBridge:
+---------------------
+The touchbar and ambient-light-sensor (ALS) are part of the iBridge chip, and hence there are 3 modules corresponding to these (`apple_ibridge`, `apple_ib_tb`, and `apple_ib_als`). Generally loading any one of these will load the others, unless you are loading them via `insmod`. If loading manually (i.e. via `insmod`), you need to first load the `industrialio_triggered_buffer` module.
 
-The touchbar is automatically dimmed and later switched off if no (internal) keyboard, touchpad, or touchbar input is received for a period of time; any (internal) keyboard, touchpad, or touchbar input switches it back on. The timeouts till the touchbar is dimmed and turned off can be changed via the `idle_timeout` and `dim_timeout` module params or sysfs attributes (`/sys/class/input/input9/device/...`); they default to 3min and 2.5min, respectively. See also `modinfo appletb`.
+The touchbar driver provides basic touchbar functionality (enabling the touchbar and switching between modes based on the FN key). The touchbar is automatically dimmed and later switched off if no (internal) keyboard, touchpad, or touchbar input is received for a period of time; any (internal) keyboard, touchpad, or touchbar input switches it back on. The timeouts till the touchbar is dimmed and turned off can be changed via the `idle_timeout` and `dim_timeout` module params or sysfs attributes (`/sys/class/input/input9/device/...`); they default to 5 min and 4.5 min, respectively. See also `modinfo apple_ib_tb`.
+
+The ALS driver exposes the ambient light sensor; if you have the `iio-sensor-proxy` installed then it should be recognized and handled automatically.
+
+Upgrading:
+----------
+The touchbar and ALS drivers used to be in a single module, `appletb`. This has now been split up into 3 modules, `apple_ibridge`, `apple_ib_tb`, and `apple_ib_als`. Generally whereever you were using `appletb` (e.g. in the initrd/dracut/whatever configs) you want to use `apple_ib_tb` now. Also, make sure to remove the old `appletb` module, either by first doing a `sudo dkms remove applespi/0.1 --all` before upgrading, or by manually removing the driver (e.g. `sudo find /lib/modules/ -name appletb.ko | xargs rm`).
 
 Some useful threads:
 --------------------
