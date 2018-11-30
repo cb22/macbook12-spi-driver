@@ -1400,8 +1400,6 @@ static void applespi_register_touchpad_device(struct applespi_data *applespi,
 			     0, 0);
 
 	/* touchpad button */
-	input_set_capability(touchpad_input_dev, EV_KEY, BTN_TOOL_FINGER);
-	input_set_capability(touchpad_input_dev, EV_KEY, BTN_TOUCH);
 	input_set_capability(touchpad_input_dev, EV_KEY, BTN_LEFT);
 
 	/* multitouch */
