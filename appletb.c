@@ -121,11 +121,11 @@ MODULE_PARM_DESC(idle_timeout, "Default touchbar idle timeout (in seconds); 0 di
 
 static int appletb_tb_def_dim_timeout = -2;
 module_param_named(dim_timeout, appletb_tb_def_dim_timeout, int, 0444);
-MODULE_PARM_DESC(dim_timeout, "Default touchbar dim timeout (in seconds); 0 means always dimmmed, -1 disables dimming, -2 calculates timeout based on idle-timeout");
+MODULE_PARM_DESC(dim_timeout, "Default touchbar dim timeout (in seconds); 0 means always dimmmed, -1 disables dimming, [-2] calculates timeout based on idle-timeout");
 
 static int appletb_tb_def_fn_mode = APPLETB_FN_MODE_NORM;
 module_param_named(fnmode, appletb_tb_def_fn_mode, int, 0444);
-MODULE_PARM_DESC(fnmode, "Default FN key mode: 0 = f-keys only, 1 = fn key switches from special to f-keys, 2 = inverse of 1, 3 = special keys only");
+MODULE_PARM_DESC(fnmode, "Default FN key mode: 0 = f-keys only, [1] = fn key switches from special to f-keys, 2 = inverse of 1, 3 = special keys only");
 
 static ssize_t idle_timeout_show(struct device *dev,
 				 struct device_attribute *attr, char *buf);
