@@ -170,6 +170,7 @@ struct appletb_device {
 		unsigned int		usb_epnum;
 		unsigned int		report_id;
 		unsigned int		report_type;
+		bool			suspended;
 	}			mode_info, disp_info;
 
 	struct input_handler	inp_handler;
@@ -187,6 +188,7 @@ struct appletb_device {
 	unsigned char		cur_tb_disp;
 	unsigned char		pnd_tb_disp;
 	bool			tb_autopm_off;
+	bool			restore_autopm;
 	struct delayed_work	tb_work;
 	/* protects most of the above */
 	spinlock_t		tb_lock;
@@ -345,7 +347,7 @@ static int appletb_set_tb_mode(struct appletb_device *tb_dev,
 	bool autopm_off = false;
 
 	if (!tb_dev->mode_info.usb_iface)
-		return -1;
+		return -ENOTCONN;
 
 	autopm_off = appletb_disable_autopm(tb_dev->mode_info.usb_iface);
 
@@ -369,7 +371,7 @@ static int appletb_set_tb_disp(struct appletb_device *tb_dev,
 	int rc;
 
 	if (!tb_dev->disp_info.usb_iface)
-		return -1;
+		return -ENOTCONN;
 
 	/*
 	 * Keep the USB interface powered on while the touchbar display is on
@@ -421,6 +423,7 @@ static void appletb_set_tb_worker(struct work_struct *work)
 	unsigned char pending_mode;
 	unsigned char pending_disp;
 	unsigned char current_disp;
+	bool restore_autopm;
 	bool any_tb_key_pressed, need_reschedule;
 	int rc1 = 1, rc2 = 1;
 	unsigned long flags;
@@ -430,6 +433,7 @@ static void appletb_set_tb_worker(struct work_struct *work)
 	/* handle explicit mode-change request */
 	pending_mode = tb_dev->pnd_tb_mode;
 	pending_disp = tb_dev->pnd_tb_disp;
+	restore_autopm = tb_dev->restore_autopm;
 
 	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 
@@ -440,6 +444,9 @@ static void appletb_set_tb_worker(struct work_struct *work)
 		msleep(25);
 	if (pending_disp != APPLETB_CMD_DISP_NONE)
 		rc2 = appletb_set_tb_disp(tb_dev, pending_disp);
+
+	if (restore_autopm && tb_dev->tb_autopm_off)
+		appletb_disable_autopm(tb_dev->disp_info.usb_iface);
 
 	spin_lock_irqsave(&tb_dev->tb_lock, flags);
 
@@ -463,6 +470,8 @@ static void appletb_set_tb_worker(struct work_struct *work)
 			need_reschedule = true;
 	}
 	current_disp = tb_dev->cur_tb_disp;
+
+	tb_dev->restore_autopm = false;
 
 	/* calculate time left to next timeout */
 	if (tb_dev->idle_timeout <= 0 && tb_dev->dim_timeout <= 0)
@@ -1835,14 +1844,60 @@ static void appletb_remove(struct hid_device *hdev)
 static int appletb_suspend(struct hid_device *hdev, pm_message_t message)
 {
 	struct appletb_device *tb_dev = hid_get_drvdata(hdev);
+	unsigned long flags;
+	bool all_suspended = false;
 	int rc;
-
-	if (hdev != tb_dev->mode_info.hdev)
-		return 0;
 
 	if (message.event != PM_EVENT_SUSPEND &&
 	    message.event != PM_EVENT_FREEZE)
 		return 0;
+
+	/*
+	 * Wait for both interfaces to be suspended and no more async work
+	 * in progress.
+	 */
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
+
+	if (!tb_dev->mode_info.suspended && !tb_dev->disp_info.suspended) {
+		tb_dev->active = false;
+		cancel_delayed_work(&tb_dev->tb_work);
+	}
+
+	appletb_get_report_info(tb_dev, hdev)->suspended = true;
+
+	if ((!tb_dev->mode_info.hdev || tb_dev->mode_info.suspended) &&
+	    (!tb_dev->disp_info.hdev || tb_dev->disp_info.suspended))
+		all_suspended = true;
+
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
+
+	flush_delayed_work(&tb_dev->tb_work);
+
+	if (!all_suspended) {
+		hid_info(hdev, "device suspend done.\n");
+		return 0;
+	}
+
+	/*
+	 * The touchbar device itself remembers the last state when suspended
+	 * in some cases, but in others (e.g. when mode != off and disp == off)
+	 * it resumes with a different state; furthermore it may be only
+	 * partially responsive in that state. By turning both mode and disp
+	 * off we ensure it is in a good state when resuming (and this happens
+	 * to be the same state after booting/resuming-from-hibernate, so less
+	 * special casing between the two).
+	 */
+	if (message.event == PM_EVENT_SUSPEND) {
+		appletb_set_tb_mode(tb_dev, APPLETB_CMD_MODE_OFF);
+		appletb_set_tb_disp(tb_dev, APPLETB_CMD_DISP_OFF);
+	}
+
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
+
+	tb_dev->cur_tb_mode = APPLETB_CMD_MODE_OFF;
+	tb_dev->cur_tb_disp = APPLETB_CMD_DISP_OFF;
+
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 
 	/* put iBridge to sleep */
 	rc = acpi_execute_simple_method(tb_dev->asoc_socw, NULL, 0);
@@ -1857,24 +1912,48 @@ static int appletb_suspend(struct hid_device *hdev, pm_message_t message)
 static int appletb_reset_resume(struct hid_device *hdev)
 {
 	struct appletb_device *tb_dev = hid_get_drvdata(hdev);
+	unsigned long flags;
+	bool all_suspended = false;
 	int rc;
 
-	if (hdev != tb_dev->mode_info.hdev)
-		return 0;
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
 
-	/* wake up iBridge */
-	rc = acpi_execute_simple_method(tb_dev->asoc_socw, NULL, 1);
-	if (ACPI_FAILURE(rc))
-		pr_warn("SOCW(1) failed: %s\n", acpi_format_exception(rc));
+	if ((!tb_dev->mode_info.hdev || tb_dev->mode_info.suspended) &&
+	    (!tb_dev->disp_info.hdev || tb_dev->disp_info.suspended))
+		all_suspended = true;
 
-	/* restore touchbar state */
-	appletb_set_tb_mode(tb_dev, tb_dev->cur_tb_mode);
-	appletb_set_tb_disp(tb_dev, tb_dev->cur_tb_disp);
-	tb_dev->last_event_time = ktime_get();
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
+
+	if (all_suspended) {
+		/* wake up iBridge */
+		rc = acpi_execute_simple_method(tb_dev->asoc_socw, NULL, 1);
+		if (ACPI_FAILURE(rc))
+			pr_warn("SOCW(1) failed: %s\n", acpi_format_exception(rc));
+	}
+
+	/*
+	 * Restore touchbar state. Note that autopm state is preserved, no need
+	 * explicitly restore that here.
+	 */
+	spin_lock_irqsave(&tb_dev->tb_lock, flags);
+
+	appletb_get_report_info(tb_dev, hdev)->suspended = false;
+
+	if ((tb_dev->mode_info.hdev && !tb_dev->mode_info.suspended) &&
+	    (tb_dev->disp_info.hdev && !tb_dev->disp_info.suspended)) {
+		tb_dev->active = true;
+		tb_dev->restore_autopm = true;
+		tb_dev->last_event_time = ktime_get();
+
+		appletb_update_touchbar_no_lock(tb_dev, true);
+	}
+
+	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 
 	/* restore als state */
-	appletb_config_sensor(tb_dev, tb_dev->als_events_enabled,
-			      tb_dev->als_sensitivity);
+	if (tb_dev->als_dev == hdev)
+		appletb_config_sensor(tb_dev, tb_dev->als_events_enabled,
+				      tb_dev->als_sensitivity);
 
 	hid_info(hdev, "device resume done.\n");
 
