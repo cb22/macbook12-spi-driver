@@ -1743,7 +1743,7 @@ static int applespi_probe(struct spi_device *spi)
 					 GFP_KERNEL);
 
 	if (!applespi->tx_buffer || !applespi->tx_status ||
-	    !applespi->rx_buffer)
+	    !applespi->rx_buffer || !applespi->msg_buf)
 		return -ENOMEM;
 
 	/* set up our spi messages */
