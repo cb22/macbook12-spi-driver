@@ -435,6 +435,9 @@ static void appletb_set_tb_worker(struct work_struct *work)
 
 	if (pending_mode != APPLETB_CMD_MODE_NONE)
 		rc1 = appletb_set_tb_mode(tb_dev, pending_mode);
+	if (pending_mode != APPLETB_CMD_MODE_NONE &&
+	    pending_disp != APPLETB_CMD_DISP_NONE)
+		msleep(25);
 	if (pending_disp != APPLETB_CMD_DISP_NONE)
 		rc2 = appletb_set_tb_disp(tb_dev, pending_disp);
 
