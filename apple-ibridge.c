@@ -383,6 +383,47 @@ static int appleib_hid_event(struct hid_device *hdev, struct hid_field *field,
 	return appleib_forward_int_op(hdev, appleib_hid_event_fwd, &args);
 }
 
+static __u8* appleib_report_fixup(struct hid_device *hdev, __u8 *rdesc,
+				  unsigned int *rsize)
+{
+	/* Some fields have a size of 64 bits, which according to HID 1.11
+	 * Section 8.4 is not valid ("An item field cannot span more than 4
+	 * bytes in a report"). Furthermore, hid_field_extract() complains
+	 * when encountering such a field. So turn them into two 32-bit fields
+	 * instead.
+	 */
+
+	if (*rsize == 634 &&
+	    /* Usage Page 0xff12 (vendor defined) */
+	    rdesc[212] == 0x06 && rdesc[213] == 0x12 && rdesc[214] == 0xff &&
+	    /* Usage 0x51 */
+	    rdesc[416] == 0x09 && rdesc[417] == 0x51 &&
+	    /* report size 64 */
+	    rdesc[432] == 0x75 && rdesc[433] == 64 &&
+	    /* report count 1 */
+	    rdesc[434] == 0x95 && rdesc[435] == 1) {
+		rdesc[433] = 32;
+		rdesc[435] = 2;
+		hid_dbg(hdev, "Fixed up first 64-bit field\n");
+	}
+
+	if (*rsize == 634 &&
+	    /* Usage Page 0xff12 (vendor defined) */
+	    rdesc[212] == 0x06 && rdesc[213] == 0x12 && rdesc[214] == 0xff &&
+	    /* Usage 0x51 */
+	    rdesc[611] == 0x09 && rdesc[612] == 0x51 &&
+	    /* report size 64 */
+	    rdesc[627] == 0x75 && rdesc[628] == 64 &&
+	    /* report count 1 */
+	    rdesc[629] == 0x95 && rdesc[630] == 1) {
+		rdesc[628] = 32;
+		rdesc[630] = 2;
+		hid_dbg(hdev, "Fixed up second 64-bit field\n");
+	}
+
+	return rdesc;
+}
+
 static int appleib_input_configured_fwd(struct appleib_hid_drv_info *drv_info,
 					struct hid_device *hdev, void *args)
 {
@@ -658,6 +699,7 @@ static struct hid_driver appleib_hid_driver = {
 	.probe = appleib_hid_probe,
 	.remove = appleib_hid_remove,
 	.event = appleib_hid_event,
+	.report_fixup = appleib_report_fixup,
 	.input_configured = appleib_input_configured,
 #ifdef CONFIG_PM
 	.suspend = appleib_hid_suspend,
