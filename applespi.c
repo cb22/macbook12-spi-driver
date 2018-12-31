@@ -1621,11 +1621,18 @@ static void applespi_async_read_complete(void *context)
 {
 	struct applespi_data *applespi = context;
 
-	if (applespi->rd_m.status < 0)
+	if (applespi->rd_m.status < 0) {
 		pr_warn("Error reading from device: %d\n",
 			applespi->rd_m.status);
-	else
+		/*
+		 * We don't actually know if this was a pure read, or a response
+		 * to a write. But this is a rare error condition that should
+		 * never occur, so clearing both flags to avoid deadlock.
+		 */
+		applespi_msg_complete(applespi, true, true);
+	} else {
 		applespi_got_data(applespi);
+	}
 
 	acpi_finish_gpe(NULL, applespi->gpe);
 }
