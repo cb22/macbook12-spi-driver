@@ -1706,7 +1706,7 @@ static void applespi_save_bl_level(unsigned int level)
 
 	sts = efivar_entry_set_safe(EFI_BL_LEVEL_NAME, efi_guid, efi_attr, true,
 				    efi_data_len, &efi_data);
-	if (sts != EFI_SUCCESS)
+	if (sts)
 		pr_warn("Error saving backlight level to EFI vars: %d\n", sts);
 }
 
