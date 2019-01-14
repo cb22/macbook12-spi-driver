@@ -50,7 +50,6 @@
 #include <linux/interrupt.h>
 #include <linux/property.h>
 #include <linux/delay.h>
-#include <linux/dmi.h>
 #include <linux/spinlock.h>
 #include <linux/crc16.h>
 #include <linux/wait.h>
