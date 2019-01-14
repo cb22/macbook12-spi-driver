@@ -6,26 +6,26 @@
  */
 
 /**
- * MacBookPro models with a touchbar (13,[23] and 14,[23]) have an Apple
- * iBridge chip which exposes the touchbar, built-in webcam (iSight), and
+ * MacBookPro models with a Touch Bar (13,[23] and 14,[23]) have an Apple
+ * iBridge chip which exposes the touch bar, built-in webcam (iSight), and
  * ambient light sensor. It shows up in the system as a USB device with 3
  * configurations: 'Default iBridge Interfaces', 'Default iBridge
  * Interfaces(OS X)', and 'Default iBridge Interfaces(Recovery)'. While
- * the second one is used by MacOS to provide the fancy touchbar
+ * the second one is used by MacOS to provide the fancy touch bar
  * functionality with custom buttons etc, this driver just uses the first.
  *
  * In the first (default after boot) configuration, 4 usb interfaces are
  * exposed: 2 related to the webcam, and 2 USB HID interfaces representing
- * the touchbar and the ambient light sensor. The webcam interfaces are
+ * the touch bar and the ambient light sensor. The webcam interfaces are
  * already handled by the uvcvideo driver; furthermore, the handling of
- * the input reports when "keys" on the touchbar are pressed is already
+ * the input reports when "keys" on the touch bar are pressed is already
  * handled properly by the generic USB HID core. This leaves the
- * management of the touchbar modes (e.g. switching between function and
- * special keys when the FN key is pressed), the touchbar display (dimming
+ * management of the touch bar modes (e.g. switching between function and
+ * special keys when the FN key is pressed), the touch bar display (dimming
  * and turning off), the key-remapping when the FN key is pressed, and
  * handling of the light sensor.
  *
- * This driver is implemented as an MFD driver, with the touchbar and ALS
+ * This driver is implemented as an MFD driver, with the touch bar and ALS
  * functions implemented by appropriate subdrivers (mfd cells). Because
  * both those are basically hid drivers, but the current kernel driver
  * structure does not allow more than one driver per device, this driver

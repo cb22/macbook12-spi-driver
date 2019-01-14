@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Apple Touchbar Driver
+ * Apple Touch Bar Driver
  *
  * Copyright (c) 2017-2018 Ronald Tschalär
  */
 
 /**
- * Recent MacBookPro models (13,[23] and 14,[23]) have a touchbar, which
+ * Recent MacBookPro models (13,[23] and 14,[23]) have a Touch Bar, which
  * is exposed via several USB interfaces. MacOS supports a fancy mode
  * where arbitrary buttons can be defined; this driver currently only
  * supports the simple mode that consists of 3 predefined layouts
@@ -14,12 +14,12 @@
  *
  * The first USB HID interface supports two reports, an input report that
  * is used to report the key presses, and an output report which can be
- * used to set the touchbar "mode": touchbar off (in which case no touches
+ * used to set the touch bar "mode": touch bar off (in which case no touches
  * are reported at all), escape key only, escape + 12 function keys, and
  * escape + several special keys (including brightness, audio volume,
  * etc). The second interface supports several, complex reports, most of
  * which are unknown at this time, but one of which has been determined to
- * allow for controlling of the touchbar's brightness: off (though touches
+ * allow for controlling of the touch bar's brightness: off (though touches
  * are still reported), dimmed, and full brightness. This driver makes
  * use of these two reports.
  */
@@ -72,11 +72,11 @@
 
 static int appletb_tb_def_idle_timeout = 5 * 60;
 module_param_named(idle_timeout, appletb_tb_def_idle_timeout, int, 0444);
-MODULE_PARM_DESC(idle_timeout, "Default touchbar idle timeout (in seconds); 0 disables touchbar, -1 disables timeout");
+MODULE_PARM_DESC(idle_timeout, "Default touch bar idle timeout (in seconds); 0 disables touch bar, -1 disables timeout");
 
 static int appletb_tb_def_dim_timeout = -2;
 module_param_named(dim_timeout, appletb_tb_def_dim_timeout, int, 0444);
-MODULE_PARM_DESC(dim_timeout, "Default touchbar dim timeout (in seconds); 0 means always dimmmed, -1 disables dimming, [-2] calculates timeout based on idle-timeout");
+MODULE_PARM_DESC(dim_timeout, "Default touch bar dim timeout (in seconds); 0 means always dimmmed, -1 disables dimming, [-2] calculates timeout based on idle-timeout");
 
 static int appletb_tb_def_fn_mode = APPLETB_FN_MODE_NORM;
 module_param_named(fnmode, appletb_tb_def_fn_mode, int, 0444);
@@ -211,7 +211,7 @@ static bool appletb_disable_autopm(struct usb_interface *iface)
 	if (rc == 0)
 		return true;
 
-	pr_err("Failed to disable auto-pm on touchbar device (%d)\n", rc);
+	pr_err("Failed to disable auto-pm on touch bar device (%d)\n", rc);
 	return false;
 }
 
@@ -231,7 +231,7 @@ static int appletb_set_tb_mode(struct appletb_device *tb_dev,
 							USB_RECIP_DEVICE,
 				     &mode, 1);
 	if (rc < 0)
-		pr_err("Failed to set touchbar mode to %u (%d)\n", mode, rc);
+		pr_err("Failed to set touch bar mode to %u (%d)\n", mode, rc);
 
 	if (autopm_off)
 		usb_autopm_put_interface(tb_dev->mode_info.usb_iface);
@@ -249,7 +249,7 @@ static int appletb_set_tb_disp(struct appletb_device *tb_dev,
 		return -ENOTCONN;
 
 	/*
-	 * Keep the USB interface powered on while the touchbar display is on
+	 * Keep the USB interface powered on while the touch bar display is on
 	 * for better responsiveness.
 	 */
 	if (disp != APPLETB_CMD_DISP_OFF &&
@@ -265,7 +265,8 @@ static int appletb_set_tb_disp(struct appletb_device *tb_dev,
 						USB_RECIP_INTERFACE,
 				     report, sizeof(report));
 	if (rc < 0)
-		pr_err("Failed to set touchbar display to %u (%d)\n", disp, rc);
+		pr_err("Failed to set touch bar display to %u (%d)\n", disp,
+		       rc);
 
 	if (disp == APPLETB_CMD_DISP_OFF &&
 	    tb_dev->cur_tb_disp != APPLETB_CMD_DISP_OFF) {
@@ -457,7 +458,7 @@ static unsigned char appletb_get_fn_tb_mode(struct appletb_device *tb_dev)
 }
 
 /*
- * Switch touchbar mode and display when mode or display not the desired ones.
+ * Switch touch bar mode and display when mode or display not the desired ones.
  */
 static void appletb_update_touchbar_no_lock(struct appletb_device *tb_dev,
 					    bool force)
@@ -487,8 +488,9 @@ static void appletb_update_touchbar_no_lock(struct appletb_device *tb_dev,
 	}
 
 	/*
-	 * See if we need to update the touchbar, taking into account that we
-	 * generally don't want to switch modes while a touchbar key is pressed.
+	 * See if we need to update the touch bar, taking into account that we
+	 * generally don't want to switch modes while a touch bar key is
+	 * pressed.
 	 */
 	if (appletb_get_cur_tb_mode(tb_dev) != want_mode &&
 	    !appletb_any_tb_key_pressed(tb_dev)) {
@@ -673,9 +675,9 @@ static int appletb_hid_event(struct hid_device *hdev, struct hid_field *field,
 		return 0;
 
 	/*
-	 * Skip non-touchbar keys.
+	 * Skip non-touch-bar keys.
 	 *
-	 * Either the touchbar itself or usbhid generate a slew of key-down
+	 * Either the touch bar itself or usbhid generate a slew of key-down
 	 * events for all the meta keys. None of which we're at all interested
 	 * in.
 	 */
@@ -692,19 +694,19 @@ static int appletb_hid_event(struct hid_device *hdev, struct hid_field *field,
 
 	new_code = appletb_fn_to_special(usage->code);
 
-	/* remember which (untranslated) touchbar keys are pressed */
+	/* remember which (untranslated) touch bar keys are pressed */
 	if (value != 2)
 		tb_dev->last_tb_keys_pressed[slot] = value;
 
 	/* remember last time keyboard or touchpad was touched */
 	tb_dev->last_event_time = ktime_get();
 
-	/* only switch touchbar mode when no touchbar keys are pressed */
+	/* only switch touch bar mode when no touch bar keys are pressed */
 	appletb_update_touchbar_no_lock(tb_dev, false);
 
 	/*
-	 * We want to suppress touchbar keys while the touchbar is off, but we
-	 * do want to wake up the screen if it's asleep, so generate a dummy
+	 * We want to suppress touch bar keys while the touch bar is off, but
+	 * we do want to wake up the screen if it's asleep, so generate a dummy
 	 * event.
 	 */
 	if (tb_dev->cur_tb_mode == APPLETB_CMD_MODE_OFF ||
@@ -767,13 +769,13 @@ static void appletb_inp_event(struct input_handle *handle, unsigned int type,
 	/* remember last time keyboard or touchpad was touched */
 	tb_dev->last_event_time = ktime_get();
 
-	/* only switch touchbar mode when no touchbar keys are pressed */
+	/* only switch touch bar mode when no touch bar keys are pressed */
 	appletb_update_touchbar_no_lock(tb_dev, false);
 
 	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 }
 
-/* Find and save the usb-device associated with the touchbar input device */
+/* Find and save the usb-device associated with the touch bar input device */
 static struct usb_interface *appletb_get_usb_iface(struct hid_device *hdev)
 {
 	struct device *dev = &hdev->dev;
@@ -985,7 +987,7 @@ static int appletb_probe(struct hid_device *hdev,
 		/* mark active */
 		appletb_mark_active(tb_dev, true);
 
-		/* initialize the touchbar */
+		/* initialize the touch bar */
 		if (appletb_tb_def_fn_mode >= 0 &&
 		    appletb_tb_def_fn_mode <= APPLETB_FN_MODE_MAX)
 			tb_dev->fn_mode = appletb_tb_def_fn_mode;
@@ -1117,7 +1119,7 @@ static int appletb_suspend(struct hid_device *hdev, pm_message_t message)
 	}
 
 	/*
-	 * The touchbar device itself remembers the last state when suspended
+	 * The touch bar device itself remembers the last state when suspended
 	 * in some cases, but in others (e.g. when mode != off and disp == off)
 	 * it resumes with a different state; furthermore it may be only
 	 * partially responsive in that state. By turning both mode and disp
@@ -1149,7 +1151,7 @@ static int appletb_reset_resume(struct hid_device *hdev)
 	unsigned long flags;
 
 	/*
-	 * Restore touchbar state. Note that autopm state is preserved, no need
+	 * Restore touch bar state. Note that autopm state is preserved, no need
 	 * explicitly restore that here.
 	 */
 	spin_lock_irqsave(&tb_dev->tb_lock, flags);
@@ -1272,5 +1274,5 @@ static struct platform_driver appletb_platform_driver = {
 module_platform_driver(appletb_platform_driver);
 
 MODULE_AUTHOR("Ronald Tschalär");
-MODULE_DESCRIPTION("MacBookPro touchbar driver");
+MODULE_DESCRIPTION("MacBookPro Touch Bar driver");
 MODULE_LICENSE("GPL");

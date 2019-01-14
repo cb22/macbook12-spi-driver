@@ -13,7 +13,7 @@
  *
  * 1. The hid-sensor-als driver is part of the hid-sensor-hub which in turn
  *    is a hid driver, but you can't have more than one hid driver per hid
- *    device, which is a problem because the touchbar also needs to
+ *    device, which is a problem because the touch bar also needs to
  *    register as a driver for this hid device.
  *
  * 2. While the hid-sensors-als driver stores sensor readings received via
@@ -694,5 +694,5 @@ static struct platform_driver appleals_platform_driver = {
 module_platform_driver(appleals_platform_driver);
 
 MODULE_AUTHOR("Ronald Tschalär");
-MODULE_DESCRIPTION("MacBookPro ALS driver");
+MODULE_DESCRIPTION("MacBookPro iBridge ALS driver");
 MODULE_LICENSE("GPL");
