@@ -64,7 +64,7 @@ static struct hid_driver appleals_hid_driver;
  * simulation.
  *
  * When the brightness value is within one of the ranges, the sensitivity is
- * set to that range's sensitivity. But order to reduce flapping when the
+ * set to that range's sensitivity. But in order to reduce flapping when the
  * brightness is right on the border between two ranges, the ranges overlap
  * somewhat (by at least one sensitivity), and sensitivity is only changed if
  * the value leaves the current sensitivity's range.
@@ -91,7 +91,7 @@ static struct appleals_sensitivity_map appleals_sensitivity_map[] = {
 	{ 729, 2430, 9720 },
 };
 
-static int appleals_compute_sensitivity(int cur_val, int cur_sens)
+static int appleals_compute_sensitivity(int cur_illum, int cur_sens)
 {
 	struct appleals_sensitivity_map *entry;
 	int i;
@@ -101,8 +101,8 @@ static int appleals_compute_sensitivity(int cur_val, int cur_sens)
 		entry = &appleals_sensitivity_map[i];
 
 		if (entry->sensitivity == cur_sens &&
-		    entry->illum_low <= cur_val &&
-		    entry->illum_high >= cur_val)
+		    entry->illum_low <= cur_illum &&
+		    entry->illum_high >= cur_illum)
 			return cur_sens;
 		else if (entry->sensitivity > cur_sens)
 			break;
@@ -112,8 +112,8 @@ static int appleals_compute_sensitivity(int cur_val, int cur_sens)
 	for (i = 0; i < ARRAY_SIZE(appleals_sensitivity_map); i++) {
 		entry = &appleals_sensitivity_map[i];
 
-		if (entry->illum_low <= cur_val &&
-		    entry->illum_high >= cur_val)
+		if (entry->illum_low <= cur_illum &&
+		    entry->illum_high >= cur_illum)
 			return entry->sensitivity;
 	}
 
@@ -452,7 +452,7 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 		hid_set_field(field, 0, sensitivity);
 	}
 
-	/* update sensor's config */
+	/* write the new config to the sensor */
 	hid_hw_request(als_dev->hid_dev, als_dev->cfg_report,
 		       HID_REQ_SET_REPORT);
 
@@ -561,6 +561,7 @@ static int appleals_probe(struct hid_device *hdev,
 
 	pr_info("Found ambient light sensor\n");
 
+	/* initialize device */
 	als_dev->hid_dev = hdev;
 	als_dev->cfg_report = state_field->report;
 	als_dev->illum_field = illum_field;
