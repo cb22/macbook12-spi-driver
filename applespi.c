@@ -103,6 +103,7 @@
 #define DBG_RD_TPAD		BIT(9)
 #define DBG_RD_UNKN		BIT(10)
 #define DBG_RD_IRQ		BIT(11)
+#define DBG_RD_CRC		BIT(12)
 #define DBG_TP_DIM		BIT(16)
 
 #define	debug_print(mask, fmt, ...) \
@@ -110,6 +111,11 @@
 		if (debug & mask) \
 			printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__); \
 	} while (0)
+
+#define	debug_print_header(mask) \
+	debug_print(mask, "--- %s ---------------------------\n", \
+		    applespi_debug_facility(mask))
+
 #define	debug_print_buffer(mask, fmt, ...) \
 	do { \
 		if (debug & mask) \
@@ -556,6 +562,8 @@ static const char *applespi_debug_facility(unsigned int log_mask)
 		return "Unknown Event";
 	case DBG_RD_IRQ:
 		return "Interrupt Request";
+	case DBG_RD_CRC:
+		return "Corrupted packet";
 	case DBG_TP_DIM:
 		return "Touchpad Dimensions";
 	default:
@@ -863,8 +871,7 @@ static void applespi_async_write_complete(void *context)
 {
 	struct applespi_data *applespi = context;
 
-	debug_print(applespi->cmd_log_mask, "--- %s ------------------------\n",
-		    applespi_debug_facility(applespi->cmd_log_mask));
+	debug_print_header(applespi->cmd_log_mask);
 	debug_print_buffer(applespi->cmd_log_mask, "write  ",
 			   applespi->tx_buffer, APPLESPI_PACKET_SIZE);
 	debug_print_buffer(applespi->cmd_log_mask, "status ",
@@ -1461,6 +1468,9 @@ static bool applespi_verify_crc(struct applespi_data *applespi, u8 *buffer,
 	if (crc != 0) {
 		dev_warn_ratelimited(&applespi->spi->dev,
 				     "Received corrupted packet (crc mismatch)\n");
+		debug_print_header(DBG_RD_CRC);
+		debug_print_buffer(DBG_RD_CRC, "read   ", buffer, buflen);
+
 		return false;
 	}
 
@@ -1483,8 +1493,7 @@ static void applespi_debug_print_read_packet(struct applespi_data *applespi,
 	else
 		dbg_mask = DBG_RD_UNKN;
 
-	debug_print(dbg_mask, "--- %s ---------------------------\n",
-		    applespi_debug_facility(dbg_mask));
+	debug_print_header(dbg_mask);
 	debug_print_buffer(dbg_mask, "read   ", applespi->rx_buffer,
 			   APPLESPI_PACKET_SIZE);
 }
@@ -1642,8 +1651,7 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 	int sts;
 	unsigned long flags;
 
-	debug_print(DBG_RD_IRQ, "--- %s ---------------------------\n",
-		    applespi_debug_facility(DBG_RD_IRQ));
+	debug_print_header(DBG_RD_IRQ);
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
