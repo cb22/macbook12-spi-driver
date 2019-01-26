@@ -473,13 +473,7 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 
 	*(struct appleals_device **)iio_priv(iio_dev) = als_dev;
 
-	iio_dev->channels = kmemdup(appleals_channels,
-				    sizeof(appleals_channels), GFP_KERNEL);
-	if (!iio_dev->channels) {
-		rc = -ENOMEM;
-		goto free_iio_dev;
-	}
-
+	iio_dev->channels = appleals_channels;
 	iio_dev->num_channels = ARRAY_SIZE(appleals_channels);
 	iio_dev->dev.parent = &als_dev->hid_dev->dev;
 	iio_dev->info = &appleals_info;
@@ -490,7 +484,7 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 					NULL);
 	if (rc) {
 		pr_err("failed to set up iio triggers: %d\n", rc);
-		goto free_channels;
+		goto free_iio_dev;
 	}
 
 	iio_trig = iio_trigger_alloc("%s-dev%d", iio_dev->name, iio_dev->id);
@@ -528,8 +522,6 @@ free_iio_trig:
 	als_dev->iio_trig = NULL;
 clean_trig_buf:
 	iio_triggered_buffer_cleanup(iio_dev);
-free_channels:
-	kfree(iio_dev->channels);
 free_iio_dev:
 	iio_device_free(iio_dev);
 
@@ -594,7 +586,6 @@ static void appleals_remove(struct hid_device *hdev)
 		als_dev->iio_trig = NULL;
 
 		iio_triggered_buffer_cleanup(als_dev->iio_dev);
-		kfree(als_dev->iio_dev->channels);
 		iio_device_free(als_dev->iio_dev);
 		als_dev->iio_dev = NULL;
 	}
