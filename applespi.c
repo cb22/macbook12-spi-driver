@@ -144,9 +144,10 @@ static unsigned int debug;
 module_param(debug, uint, 0644);
 MODULE_PARM_DESC(debug, "Enable/Disable debug logging. This is a bitmask.");
 
-static int touchpad_dimensions[4];
-module_param_array(touchpad_dimensions, int, NULL, 0444);
-MODULE_PARM_DESC(touchpad_dimensions, "The pixel dimensions of the touchpad, as x_min,x_max,y_min,y_max .");
+static char touchpad_dimensions[40];
+module_param_string(touchpad_dimensions, touchpad_dimensions,
+		    sizeof(touchpad_dimensions), 0444);
+MODULE_PARM_DESC(touchpad_dimensions, "The pixel dimensions of the touchpad, as XxY+W+H .");
 
 /**
  * struct keyboard_protocol - keyboard message.
@@ -394,8 +395,8 @@ struct spi_settings {
 
 struct applespi_tp_info {
 	int	x_min;
-	int	x_max;
 	int	y_min;
+	int	x_max;
 	int	y_max;
 };
 
@@ -530,15 +531,15 @@ struct applespi_tp_model_info {
 static const struct applespi_tp_model_info applespi_tp_models[] = {
 	{
 		.model = 0x0417,	/* MB8 MB9 MB10 */
-		.tp_info = { -5087, 5579, -182, 6089 },
+		.tp_info = { -5087, -182, 5579, 6089 },
 	},
 	{
 		.model = 0x0557,	/* MBP13,1 MBP13,2 MBP14,1 MBP14,2 */
-		.tp_info = { -6243, 6749, -170, 7685 },
+		.tp_info = { -6243, -170, 6749, 7685 },
 	},
 	{
 		.model = 0x06d7,	/* MBP13,3 MBP14,3 */
-		.tp_info = { -7456, 7976, -163, 9283 },
+		.tp_info = { -7456, -163, 7976, 9283 },
 	},
 	{}
 };
@@ -1108,6 +1109,46 @@ static inline int raw2int(__le16 x)
 	return (signed short)le16_to_cpu(x);
 }
 
+static int applespi_dbg_dim_min_x;
+static int applespi_dbg_dim_max_x;
+static int applespi_dbg_dim_min_y;
+static int applespi_dbg_dim_max_y;
+static bool applespi_dbg_dim_updated;
+
+static void applespi_debug_update_dimensions(const struct tp_finger *f)
+{
+	#define UPDATE_DIMENSIONS(val, op, last) \
+		do { \
+			if (raw2int(val) op last) { \
+				last = raw2int(val); \
+				applespi_dbg_dim_updated = true; \
+			} \
+		} while (0)
+
+	UPDATE_DIMENSIONS(f->abs_x, <, applespi_dbg_dim_min_x);
+	UPDATE_DIMENSIONS(f->abs_x, >, applespi_dbg_dim_max_x);
+	UPDATE_DIMENSIONS(f->abs_y, <, applespi_dbg_dim_min_y);
+	UPDATE_DIMENSIONS(f->abs_y, >, applespi_dbg_dim_max_y);
+
+	#undef UPDATE_DIMENSIONS
+}
+
+static void applespi_debug_print_dimensions(struct applespi_data *applespi)
+{
+	static ktime_t last_print;
+
+	if (applespi_dbg_dim_updated &&
+	    ktime_ms_delta(ktime_get(), last_print) > 1000) {
+		debug_print(DBG_TP_DIM, applespi,
+			    "New touchpad dimensions: %dx%d+%u+%u\n",
+			    applespi_dbg_dim_min_x, applespi_dbg_dim_min_y,
+			    applespi_dbg_dim_max_x - applespi_dbg_dim_min_x,
+			    applespi_dbg_dim_max_y - applespi_dbg_dim_min_y);
+		applespi_dbg_dim_updated = false;
+		last_print = ktime_get();
+	}
+}
+
 static void report_finger_data(struct input_dev *input, int slot,
 			       const struct input_mt_pos *pos,
 			       const struct tp_finger *f)
@@ -1132,10 +1173,6 @@ static void report_finger_data(struct input_dev *input, int slot,
 static void report_tp_state(struct applespi_data *applespi,
 			    struct touchpad_protocol *t)
 {
-	static int min_x, max_x, min_y, max_y;
-	static bool dim_updated;
-	static ktime_t last_print;
-
 	const struct tp_finger *f;
 	struct input_dev *input;
 	const struct applespi_tp_info *tp_info = &applespi->tp_info;
@@ -1157,32 +1194,12 @@ static void report_tp_state(struct applespi_data *applespi,
 				     raw2int(f->abs_y);
 		n++;
 
-		if (debug & DBG_TP_DIM) {
-			#define UPDATE_DIMENSIONS(val, op, last) \
-				do { \
-					if (raw2int(val) op last) { \
-						last = raw2int(val); \
-						dim_updated = true; \
-					} \
-				} while (0)
-
-			UPDATE_DIMENSIONS(f->abs_x, <, min_x);
-			UPDATE_DIMENSIONS(f->abs_x, >, max_x);
-			UPDATE_DIMENSIONS(f->abs_y, <, min_y);
-			UPDATE_DIMENSIONS(f->abs_y, >, max_y);
-		}
+		if (debug & DBG_TP_DIM)
+			applespi_debug_update_dimensions(f);
 	}
 
-	if (debug & DBG_TP_DIM) {
-		if (dim_updated &&
-		    ktime_ms_delta(ktime_get(), last_print) > 1000) {
-			debug_print(DBG_TP_DIM, applespi,
-				    "New touchpad dimensions: %d %d %d %d\n",
-				    min_x, max_x, min_y, max_y);
-			dim_updated = false;
-			last_print = ktime_get();
-		}
-	}
+	if (debug & DBG_TP_DIM)
+		applespi_debug_print_dimensions(applespi);
 
 	input_mt_assign_slots(input, applespi->slots, applespi->pos, n, 0);
 
@@ -1371,18 +1388,31 @@ static void applespi_register_touchpad_device(struct applespi_data *applespi,
 
 	applespi->tp_info = *tp_info;
 
-	if (touchpad_dimensions[0] || touchpad_dimensions[1] ||
-	    touchpad_dimensions[2] || touchpad_dimensions[3]) {
-		pr_info("Overriding touchpad dimensions from module param\n");
-		applespi->tp_info.x_min = touchpad_dimensions[0];
-		applespi->tp_info.x_max = touchpad_dimensions[1];
-		applespi->tp_info.y_min = touchpad_dimensions[2];
-		applespi->tp_info.y_max = touchpad_dimensions[3];
-	} else {
-		touchpad_dimensions[0] = applespi->tp_info.x_min;
-		touchpad_dimensions[1] = applespi->tp_info.x_max;
-		touchpad_dimensions[2] = applespi->tp_info.y_min;
-		touchpad_dimensions[3] = applespi->tp_info.y_max;
+	if (touchpad_dimensions[0]) {
+		int x, y, w, h;
+
+		if (sscanf(touchpad_dimensions, "%dx%d+%u+%u", &x, &y, &w, &h)
+				== 4) {
+			dev_info(DEV(applespi),
+				 "Overriding touchpad dimensions from module param\n");
+			applespi->tp_info.x_min = x;
+			applespi->tp_info.y_min = y;
+			applespi->tp_info.x_max = x + w;
+			applespi->tp_info.y_max = y + h;
+		} else {
+			dev_warn(DEV(applespi),
+				 "Invalid touchpad dimensions '%s': must be in the form XxY+W+H\n",
+				 touchpad_dimensions);
+			touchpad_dimensions[0] = '\0';
+		}
+	}
+	if (!touchpad_dimensions[0]) {
+		snprintf(touchpad_dimensions, sizeof(touchpad_dimensions),
+			 "%dx%d+%u+%u",
+			 applespi->tp_info.x_min,
+			 applespi->tp_info.y_min,
+			 applespi->tp_info.x_max - applespi->tp_info.x_min,
+			 applespi->tp_info.y_max - applespi->tp_info.y_min);
 	}
 
 	/* create touchpad input device */
