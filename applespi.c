@@ -157,8 +157,8 @@ MODULE_PARM_DESC(touchpad_dimensions, "The pixel dimensions of the touchpad, as 
  * @unknown2:		unknown
  * @keys_pressed:	the (non-modifier) keys currently pressed
  * @fn_pressed:		whether the fn key is currently pressed
- * @crc_16:		crc over the whole message struct (message header +
- *			this struct) minus this @crc_16 field
+ * @crc16:		crc over the whole message struct (message header +
+ *			this struct) minus this @crc16 field
  */
 struct keyboard_protocol {
 	__u8			unknown1;
@@ -166,7 +166,7 @@ struct keyboard_protocol {
 	__u8			unknown2;
 	__u8			keys_pressed[MAX_ROLLOVER];
 	__u8			fn_pressed;
-	__le16			crc_16;
+	__le16			crc16;
 };
 
 /**
@@ -185,9 +185,9 @@ struct keyboard_protocol {
  * @unused:		zeros
  * @pressure:		pressure on forcetouch touchpad
  * @multi:		one finger: varies, more fingers: constant
- * @crc_16:		on last finger: crc over the whole message struct
+ * @crc16:		on last finger: crc over the whole message struct
  *			(i.e. message header + this struct) minus the last
- *			@crc_16 field; unknown on all other fingers.
+ *			@crc16 field; unknown on all other fingers.
  */
 struct tp_finger {
 	__le16 origin;
@@ -203,7 +203,7 @@ struct tp_finger {
 	__le16 unused[2];
 	__le16 pressure;
 	__le16 multi;
-	__le16 crc_16;
+	__le16 crc16;
 };
 
 /**
@@ -232,11 +232,11 @@ struct touchpad_protocol {
  * struct command_protocol_tp_info - get touchpad info.
  * message.type = 0x1020, message.length = 0x0000
  *
- * @crc_16:		crc over the whole message struct (message header +
- *			this struct) minus this @crc_16 field
+ * @crc16:		crc over the whole message struct (message header +
+ *			this struct) minus this @crc16 field
  */
 struct command_protocol_tp_info {
-	__le16			crc_16;
+	__le16			crc16;
 };
 
 /**
@@ -246,14 +246,14 @@ struct command_protocol_tp_info {
  * @unknown1:		unknown
  * @model_id:		the touchpad model number
  * @unknown2:		unknown
- * @crc_16:		crc over the whole message struct (message header +
- *			this struct) minus this @crc_16 field
+ * @crc16:		crc over the whole message struct (message header +
+ *			this struct) minus this @crc16 field
  */
 struct touchpad_info_protocol {
 	__u8			unknown1[105];
 	__le16			model_id;
 	__u8			unknown2[3];
-	__le16			crc_16;
+	__le16			crc16;
 } __packed;
 
 /**
@@ -261,12 +261,12 @@ struct touchpad_info_protocol {
  * message.type = 0x0252, message.length = 0x0002
  *
  * @cmd:		value: 0x0102
- * @crc_16:		crc over the whole message struct (message header +
- *			this struct) minus this @crc_16 field
+ * @crc16:		crc over the whole message struct (message header +
+ *			this struct) minus this @crc16 field
  */
 struct command_protocol_mt_init {
 	__le16			cmd;
-	__le16			crc_16;
+	__le16			crc16;
 };
 
 /**
@@ -275,13 +275,13 @@ struct command_protocol_mt_init {
  *
  * @unknown:		value: 0x01 (length?)
  * @led:		0 off, 2 on
- * @crc_16:		crc over the whole message struct (message header +
- *			this struct) minus this @crc_16 field
+ * @crc16:		crc over the whole message struct (message header +
+ *			this struct) minus this @crc16 field
  */
 struct command_protocol_capsl {
 	__u8			unknown;
 	__u8			led;
-	__le16			crc_16;
+	__le16			crc16;
 };
 
 /**
@@ -291,14 +291,14 @@ struct command_protocol_capsl {
  * @const1:		value: 0x01B0
  * @level:		the brightness level to set
  * @const2:		value: 0x0001 (backlight off), 0x01F4 (backlight on)
- * @crc_16:		crc over the whole message struct (message header +
- *			this struct) minus this @crc_16 field
+ * @crc16:		crc over the whole message struct (message header +
+ *			this struct) minus this @crc16 field
  */
 struct command_protocol_bl {
 	__le16			const1;
 	__le16			level;
 	__le16			const2;
-	__le16			crc_16;
+	__le16			crc16;
 };
 
 /**
@@ -365,7 +365,7 @@ struct message {
  *		then be the same as the @length in the second packet)
  * @length:	length of the valid data in the @data in this packet
  * @data:	all or part of a message
- * @crc_16:	crc over this whole structure minus this @crc_16 field. This
+ * @crc16:	crc over this whole structure minus this @crc16 field. This
  *		covers just this packet, even on multi-packet messages (in
  *		contrast to the crc in the message).
  */
@@ -376,7 +376,7 @@ struct spi_packet {
 	__le16			remaining;
 	__le16			length;
 	__u8			data[246];
-	__le16			crc_16;
+	__le16			crc16;
 };
 
 struct spi_settings {
@@ -984,7 +984,7 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	*((__le16 *)&message->data[msg_len - 2]) = cpu_to_le16(crc);
 
 	crc = crc16(0, (u8 *)packet, sizeof(*packet) - 2);
-	packet->crc_16 = cpu_to_le16(crc);
+	packet->crc16 = cpu_to_le16(crc);
 
 	/* send command */
 	sts = applespi_async(applespi, &applespi->wr_m,
