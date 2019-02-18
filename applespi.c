@@ -85,11 +85,11 @@
 #define MAX_FINGER_ORIENTATION	16384
 #define MAX_PKTS_PER_MSG	2
 
-#define MIN_KBD_BL_LEVEL	32
-#define MAX_KBD_BL_LEVEL	255
-#define KBD_BL_LEVEL_SCALE	1000000
+#define KBD_BL_LEVEL_MIN	32U
+#define KBD_BL_LEVEL_MAX	255U
+#define KBD_BL_LEVEL_SCALE	1000000U
 #define KBD_BL_LEVEL_ADJ	\
-	((MAX_KBD_BL_LEVEL - MIN_KBD_BL_LEVEL) * KBD_BL_LEVEL_SCALE / 255)
+	((KBD_BL_LEVEL_MAX - KBD_BL_LEVEL_MIN) * KBD_BL_LEVEL_SCALE / 255U)
 
 #define EFI_BL_LEVEL_NAME	L"KeyboardBacklightLevel"
 #define EFI_BL_LEVEL_GUID	EFI_GUID(0xa076d2af, 0x9678, 0x4386, 0x8b, 0x58, 0x1f, 0xc8, 0xef, 0x04, 0x16, 0x19)
@@ -1049,9 +1049,9 @@ static void applespi_set_bl_level(struct led_classdev *led_cdev,
 		 * the range here so that from a user's perspective it turns
 		 * on at 1.
 		 */
-		applespi->want_bl_level = (unsigned int)
+		applespi->want_bl_level =
 			((value * KBD_BL_LEVEL_ADJ) / KBD_BL_LEVEL_SCALE +
-			 MIN_KBD_BL_LEVEL);
+			 KBD_BL_LEVEL_MIN);
 
 	sts = applespi_send_cmd_msg(applespi);
 
