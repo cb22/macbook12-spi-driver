@@ -840,19 +840,20 @@ static int applespi_setup_spi(struct applespi_data *applespi)
 
 static int applespi_enable_spi(struct applespi_data *applespi)
 {
-	int result;
+	acpi_status acpi_sts;
 	unsigned long long spi_status;
 
 	/* check if SPI is already enabled, so we can skip the delay below */
-	result = acpi_evaluate_integer(applespi->sist, NULL, NULL, &spi_status);
-	if (ACPI_SUCCESS(result) && spi_status)
+	acpi_sts = acpi_evaluate_integer(applespi->sist, NULL, NULL,
+					 &spi_status);
+	if (ACPI_SUCCESS(acpi_sts) && spi_status)
 		return 0;
 
 	/* SIEN(1) will enable SPI communication */
-	result = acpi_execute_simple_method(applespi->sien, NULL, 1);
-	if (ACPI_FAILURE(result)) {
+	acpi_sts = acpi_execute_simple_method(applespi->sien, NULL, 1);
+	if (ACPI_FAILURE(acpi_sts)) {
 		dev_err(DEV(applespi), "SIEN failed: %s\n",
-			acpi_format_exception(result));
+			acpi_format_exception(acpi_sts));
 		return -ENODEV;
 	}
 
@@ -1016,8 +1017,7 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	/* send command */
 	sts = applespi_async(applespi, &applespi->wr_m,
 			     applespi_async_write_complete);
-
-	if (sts != 0) {
+	if (sts) {
 		dev_warn(DEV(applespi),
 			 "Error queueing async write to device: %d\n", sts);
 	} else {
@@ -1358,7 +1358,7 @@ static void applespi_register_touchpad_device(struct applespi_data *applespi,
 {
 	const struct applespi_tp_info *tp_info;
 	struct input_dev *touchpad_input_dev;
-	int res;
+	int sts;
 
 	/* set up touchpad dimensions */
 	tp_info = applespi_find_touchpad_info(rcvd_tp_info->model_id);
@@ -1441,11 +1441,10 @@ static void applespi_register_touchpad_device(struct applespi_data *applespi,
 			    INPUT_MT_TRACK);
 
 	/* register input device */
-	res = input_register_device(touchpad_input_dev);
-	if (res)
+	sts = input_register_device(touchpad_input_dev);
+	if (sts) {
 		dev_err(DEV(applespi),
-			"Unable to register touchpad input device (%d)\n",
-			res);
+			"Unable to register touchpad input device (%d)\n", sts);
 	else
 		/* touchpad_input_dev is read async in spi callback */
 		smp_store_release(&applespi->touchpad_input_dev,
@@ -1693,7 +1692,7 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 	if (!applespi->suspended) {
 		sts = applespi_async(applespi, &applespi->rd_m,
 				     applespi_async_read_complete);
-		if (sts != 0)
+		if (sts)
 			dev_warn(DEV(applespi),
 				 "Error queueing async read to device: %d\n",
 				 sts);
@@ -1759,13 +1758,14 @@ static void applespi_save_bl_level(struct applespi_data *applespi,
 static int applespi_probe(struct spi_device *spi)
 {
 	struct applespi_data *applespi;
-	int result, i;
+	acpi_status acpi_sts;
+	int sts, i;
 	unsigned long long gpe, usb_status;
 
 	/* check if the USB interface is present and enabled already */
-	result = acpi_evaluate_integer(ACPI_HANDLE(&spi->dev), "UIST", NULL,
-				       &usb_status);
-	if (ACPI_SUCCESS(result) && usb_status) {
+	acpi_sts = acpi_evaluate_integer(ACPI_HANDLE(&spi->dev), "UIST", NULL,
+					 &usb_status);
+	if (ACPI_SUCCESS(acpi_sts) && usb_status) {
 		/* let the USB driver take over instead */
 		dev_info(&spi->dev, "USB interface already enabled\n");
 		return -ENODEV;
@@ -1814,13 +1814,13 @@ static int applespi_probe(struct spi_device *spi)
 	}
 
 	/* switch on the SPI interface */
-	result = applespi_setup_spi(applespi);
-	if (result)
-		return result;
+	sts = applespi_setup_spi(applespi);
+	if (sts)
+		return sts;
 
-	result = applespi_enable_spi(applespi);
-	if (result)
-		return result;
+	sts = applespi_enable_spi(applespi);
+	if (sts)
+		return sts;
 
 	/* setup the keyboard input dev */
 	applespi->keyboard_input_dev = devm_input_allocate_device(&spi->dev);
@@ -1857,11 +1857,10 @@ static int applespi_probe(struct spi_device *spi)
 
 	input_set_capability(applespi->keyboard_input_dev, EV_KEY, KEY_FN);
 
-	result = input_register_device(applespi->keyboard_input_dev);
-	if (result) {
+	sts = input_register_device(applespi->keyboard_input_dev);
+	if (sts) {
 		dev_err(DEV(applespi),
-			"Unable to register keyboard input device (%d)\n",
-			result);
+			"Unable to register keyboard input device (%d)\n", sts);
 		return -ENODEV;
 	}
 
@@ -1869,32 +1868,32 @@ static int applespi_probe(struct spi_device *spi)
 	 * The applespi device doesn't send interrupts normally (as is described
 	 * in its DSDT), but rather seems to use ACPI GPEs.
 	 */
-	result = acpi_evaluate_integer(applespi->handle, "_GPE", NULL, &gpe);
-	if (ACPI_FAILURE(result)) {
+	acpi_sts = acpi_evaluate_integer(applespi->handle, "_GPE", NULL, &gpe);
+	if (ACPI_FAILURE(acpi_sts)) {
 		dev_err(DEV(applespi),
 			"Failed to obtain GPE for SPI slave device: %s\n",
-			acpi_format_exception(result));
+			acpi_format_exception(acpi_sts));
 		return -ENODEV;
 	}
 	applespi->gpe = (int)gpe;
 
-	result = acpi_install_gpe_handler(NULL, applespi->gpe,
-					  ACPI_GPE_LEVEL_TRIGGERED,
-					  applespi_notify, applespi);
-	if (ACPI_FAILURE(result)) {
+	acpi_sts = acpi_install_gpe_handler(NULL, applespi->gpe,
+					    ACPI_GPE_LEVEL_TRIGGERED,
+					    applespi_notify, applespi);
+	if (ACPI_FAILURE(acpi_sts)) {
 		dev_err(DEV(applespi),
 			"Failed to install GPE handler for GPE %d: %s\n",
-			applespi->gpe, acpi_format_exception(result));
+			applespi->gpe, acpi_format_exception(acpi_sts));
 		return -ENODEV;
 	}
 
 	applespi->suspended = false;
 
-	result = acpi_enable_gpe(NULL, applespi->gpe);
-	if (ACPI_FAILURE(result)) {
+	acpi_sts = acpi_enable_gpe(NULL, applespi->gpe);
+	if (ACPI_FAILURE(acpi_sts)) {
 		dev_err(DEV(applespi),
 			"Failed to enable GPE handler for GPE %d: %s\n",
-			applespi->gpe, acpi_format_exception(result));
+			applespi->gpe, acpi_format_exception(acpi_sts));
 		acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
 		return -ENODEV;
 	}
@@ -1910,20 +1909,19 @@ static int applespi_probe(struct spi_device *spi)
 	device_wakeup_enable(&spi->dev);
 
 	/* set up keyboard-backlight */
-	result = applespi_get_saved_bl_level(applespi);
-	if (result >= 0)
-		applespi_set_bl_level(&applespi->backlight_info, result);
+	sts = applespi_get_saved_bl_level(applespi);
+	if (sts >= 0)
+		applespi_set_bl_level(&applespi->backlight_info, sts);
 
 	applespi->backlight_info.name            = "spi::kbd_backlight";
 	applespi->backlight_info.default_trigger = "kbd-backlight";
 	applespi->backlight_info.brightness_set  = applespi_set_bl_level;
 
-	result = devm_led_classdev_register(&spi->dev,
-					    &applespi->backlight_info);
-	if (result) {
+	sts = devm_led_classdev_register(&spi->dev, &applespi->backlight_info);
+	if (sts) {
 		dev_warn(DEV(applespi),
 			 "Unable to register keyboard backlight class dev (%d)\n",
-			 result);
+			 sts);
 		/* not fatal */
 	}
 
@@ -1980,15 +1978,15 @@ static int applespi_suspend(struct device *dev)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct applespi_data *applespi = spi_get_drvdata(spi);
-	acpi_status status;
+	acpi_status acpi_sts;
 	unsigned long flags;
-	int rc;
+	int sts;
 
 	/* turn off caps-lock - it'll stay on otherwise */
-	rc = applespi_set_capsl_led(applespi, false);
-	if (rc)
+	sts = applespi_set_capsl_led(applespi, false);
+	if (sts)
 		dev_warn(DEV(applespi),
-			 "Failed to turn off caps-lock led (%d)\n", rc);
+			 "Failed to turn off caps-lock led (%d)\n", sts);
 
 	/* wait for all outstanding writes to finish */
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
@@ -2000,12 +1998,11 @@ static int applespi_suspend(struct device *dev)
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 
 	/* disable the interrupt */
-	status = acpi_disable_gpe(NULL, applespi->gpe);
-	if (ACPI_FAILURE(status)) {
+	acpi_sts = acpi_disable_gpe(NULL, applespi->gpe);
+	if (ACPI_FAILURE(acpi_sts))
 		dev_err(DEV(applespi),
 			"Failed to disable GPE handler for GPE %d: %s\n",
-			applespi->gpe, acpi_format_exception(status));
-	}
+			applespi->gpe, acpi_format_exception(acpi_sts));
 
 	/* wait for all outstanding reads to finish */
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
@@ -2024,7 +2021,7 @@ static int applespi_resume(struct device *dev)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct applespi_data *applespi = spi_get_drvdata(spi);
-	acpi_status status;
+	acpi_status acpi_sts;
 	unsigned long flags;
 
 	/* ensure our flags and state reflect a newly resumed device */
@@ -2045,12 +2042,11 @@ static int applespi_resume(struct device *dev)
 	applespi_enable_spi(applespi);
 
 	/* re-enable the interrupt */
-	status = acpi_enable_gpe(NULL, applespi->gpe);
-	if (ACPI_FAILURE(status)) {
+	acpi_sts = acpi_enable_gpe(NULL, applespi->gpe);
+	if (ACPI_FAILURE(acpi_sts))
 		dev_err(DEV(applespi),
 			"Failed to re-enable GPE handler for GPE %d: %s\n",
-			applespi->gpe, acpi_format_exception(status));
-	}
+			applespi->gpe, acpi_format_exception(acpi_sts));
 
 	/* switch the touchpad into multitouch mode */
 	applespi_init(applespi, true);
