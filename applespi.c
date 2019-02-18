@@ -43,26 +43,24 @@
 
 #define pr_fmt(fmt) "applespi: " fmt
 
-#include <linux/platform_device.h>
-#include <linux/module.h>
 #include <linux/acpi.h>
-#include <linux/spi/spi.h>
-#include <linux/interrupt.h>
-#include <linux/property.h>
-#include <linux/delay.h>
-#include <linux/spinlock.h>
 #include <linux/crc16.h>
-#include <linux/wait.h>
-#include <linux/leds.h>
-#include <linux/ktime.h>
+#include <linux/delay.h>
+#include <linux/efi.h>
 #include <linux/input.h>
 #include <linux/input/mt.h>
-#include <linux/input-polldev.h>
+#include <linux/ktime.h>
+#include <linux/leds.h>
+#include <linux/module.h>
+#include <linux/platform_device.h>
+#include <linux/spinlock.h>
+#include <linux/spi/spi.h>
+#include <linux/version.h>
+#include <linux/wait.h>
 #include <linux/workqueue.h>
-#include <linux/efi.h>
+
 #include <asm/barrier.h>
 
-#include <linux/version.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
 #define PRE_SPI_PROPERTIES
 #endif
