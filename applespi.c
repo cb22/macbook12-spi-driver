@@ -124,7 +124,7 @@
 
 #define APPLE_FLAG_FKEY		0x01
 
-#define SPI_RW_CHG_DLY		100	/* from experimentation, in us */
+#define SPI_RW_CHG_DELAY_US	100	/* from experimentation, in µs */
 
 #define SYNAPTICS_VENDOR_ID	0x06cb
 
@@ -637,14 +637,14 @@ static void applespi_setup_write_txfrs(struct applespi_data *applespi)
 	 * end up with an extra unnecessary (but harmless) cs assertion and
 	 * deassertion.
 	 */
-	wt_t->delay_usecs = SPI_RW_CHG_DLY;
+	wt_t->delay_usecs = SPI_RW_CHG_DELAY_US;
 	wt_t->cs_change = 1;
 
 	dl_t->delay_usecs = applespi->spi_settings.spi_cs_delay;
 
 	wr_t->tx_buf = applespi->tx_buffer;
 	wr_t->len = APPLESPI_PACKET_SIZE;
-	wr_t->delay_usecs = SPI_RW_CHG_DLY;
+	wr_t->delay_usecs = SPI_RW_CHG_DELAY_US;
 
 	st_t->rx_buf = applespi->tx_status;
 	st_t->len = APPLESPI_STATUS_SIZE;
