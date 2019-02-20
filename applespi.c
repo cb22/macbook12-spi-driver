@@ -1229,33 +1229,45 @@ static const struct applespi_key_translation *applespi_find_translation(
 	return NULL;
 }
 
-static unsigned int applespi_code_to_key(u8 code, int fn_pressed)
+static unsigned int applespi_translate_fn_key(unsigned int key, int fn_pressed)
 {
-	unsigned int key = applespi_scancodes[code];
 	const struct applespi_key_translation *trans;
+	int do_translate;
 
-	if (fnmode) {
-		int do_translate;
+	trans = applespi_find_translation(applespi_fn_codes, key);
+	if (trans) {
+		if (trans->flags & APPLE_FLAG_FKEY)
+			do_translate = (fnmode == 2 && fn_pressed) ||
+				       (fnmode == 1 && !fn_pressed);
+		else
+			do_translate = fn_pressed;
 
-		trans = applespi_find_translation(applespi_fn_codes, key);
-		if (trans) {
-			if (trans->flags & APPLE_FLAG_FKEY)
-				do_translate = (fnmode == 2 && fn_pressed) ||
-					       (fnmode == 1 && !fn_pressed);
-			else
-				do_translate = fn_pressed;
-
-			if (do_translate)
-				key = trans->to;
-		}
-	}
-
-	if (iso_layout) {
-		trans = applespi_find_translation(apple_iso_keyboard, key);
-		if (trans)
+		if (do_translate)
 			key = trans->to;
 	}
 
+	return key;
+}
+
+static unsigned int applespi_translate_iso_layout(unsigned int key)
+{
+	const struct applespi_key_translation *trans;
+
+	trans = applespi_find_translation(apple_iso_keyboard, key);
+	if (trans)
+		key = trans->to;
+
+	return key;
+}
+
+static unsigned int applespi_code_to_key(u8 code, int fn_pressed)
+{
+	unsigned int key = applespi_scancodes[code];
+
+	if (fnmode)
+		key = applespi_translate_fn_key(key, fn_pressed);
+	if (iso_layout)
+		key = applespi_translate_iso_layout(key);
 	return key;
 }
 
