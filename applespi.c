@@ -1618,7 +1618,7 @@ static void applespi_got_data(struct applespi_data *applespi)
 		dev_warn_ratelimited(DEV(applespi),
 				     "Received corrupted packet (invalid packet length %u)\n",
 				     len);
-		goto cleanup;
+		goto msg_complete;
 	}
 
 	/* handle multi-packet messages */
@@ -1627,21 +1627,21 @@ static void applespi_got_data(struct applespi_data *applespi)
 			dev_warn_ratelimited(DEV(applespi),
 					     "Received unexpected offset (got %u, expected %u)\n",
 					     off, applespi->saved_msg_len);
-			goto cleanup;
+			goto msg_complete;
 		}
 
 		if (off + rem > MAX_PKTS_PER_MSG * APPLESPI_PACKET_SIZE) {
 			dev_warn_ratelimited(DEV(applespi),
 					     "Received message too large (size %u)\n",
 					     off + rem);
-			goto cleanup;
+			goto msg_complete;
 		}
 
 		if (off + len > MAX_PKTS_PER_MSG * APPLESPI_PACKET_SIZE) {
 			dev_warn_ratelimited(DEV(applespi),
 					     "Received message too large (size %u)\n",
 					     off + len);
-			goto cleanup;
+			goto msg_complete;
 		}
 
 		memcpy(applespi->msg_buf + off, &packet->data, len);
@@ -1659,14 +1659,14 @@ static void applespi_got_data(struct applespi_data *applespi)
 
 	/* got complete message - verify */
 	if (!applespi_verify_crc(applespi, (u8 *)message, msg_len))
-		goto cleanup;
+		goto msg_complete;
 
 	if (le16_to_cpu(message->length) != msg_len - MSG_HEADER_SIZE - 2) {
 		dev_warn_ratelimited(DEV(applespi),
 				     "Received corrupted packet (invalid message length %u - expected %u)\n",
 				     le16_to_cpu(message->length),
 				     msg_len - MSG_HEADER_SIZE - 2);
-		goto cleanup;
+		goto msg_complete;
 	}
 
 	/* handle message */
@@ -1685,7 +1685,7 @@ static void applespi_got_data(struct applespi_data *applespi)
 					     "Received corrupted packet (invalid message length %u - num-fingers %u, tp-len %zu)\n",
 					     le16_to_cpu(message->length),
 					     tp->number_of_fingers, tp_len);
-			goto cleanup;
+			goto msg_complete;
 		}
 
 		if (tp->number_of_fingers > MAX_FINGERS) {
@@ -1702,7 +1702,7 @@ static void applespi_got_data(struct applespi_data *applespi)
 		applespi_handle_cmd_response(applespi, packet, message);
 	}
 
-cleanup:
+msg_complete:
 	applespi->saved_msg_len = 0;
 
 	applespi_msg_complete(applespi, packet->flags == PACKET_TYPE_WRITE,
