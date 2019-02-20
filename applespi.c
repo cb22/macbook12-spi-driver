@@ -2118,9 +2118,7 @@ const struct dev_pm_ops applespi_pm_ops = {
 static struct spi_driver applespi_driver = {
 	.driver		= {
 		.name			= "applespi",
-		.owner			= THIS_MODULE,
-
-		.acpi_match_table	= ACPI_PTR(applespi_acpi_match),
+		.acpi_match_table	= applespi_acpi_match,
 		.pm			= &applespi_pm_ops,
 	},
 	.probe		= applespi_probe,
@@ -2513,7 +2511,7 @@ static struct acpi_driver appleacpi_driver = {
 	.name		= "appleacpi",
 	.class		= "topcase", /* ? */
 	.owner		= THIS_MODULE,
-	.ids		= ACPI_PTR(applespi_acpi_match),
+	.ids		= applespi_acpi_match,
 	.ops		= {
 		.add		= appleacpi_probe,
 		.remove		= appleacpi_remove,
