@@ -907,12 +907,13 @@ static void applespi_async_write_complete(void *context)
 	debug_print_buffer(applespi->cmd_log_mask, applespi, "status ",
 			   applespi->tx_status, APPLESPI_STATUS_SIZE);
 
-	if (!applespi_check_write_status(applespi, applespi->wr_m.status))
+	if (!applespi_check_write_status(applespi, applespi->wr_m.status)) {
 		/*
 		 * If we got an error, we presumably won't get the expected
 		 * response message either.
 		 */
 		applespi_msg_complete(applespi, true, false);
+	}
 }
 
 static int applespi_send_cmd_msg(struct applespi_data *applespi)
@@ -1098,8 +1099,7 @@ static int applespi_event(struct input_dev *dev, unsigned int type,
 
 	switch (type) {
 	case EV_LED:
-		applespi_set_capsl_led(applespi,
-				       !!test_bit(LED_CAPSL, dev->led));
+		applespi_set_capsl_led(applespi, !!test_bit(LED_CAPSL, dev->led));
 		return 0;
 	}
 
@@ -1275,8 +1275,8 @@ static void
 applespi_remap_fn_key(struct keyboard_protocol *keyboard_protocol)
 {
 	unsigned char tmp;
-	unsigned long *modifiers = (unsigned long *)
-						&keyboard_protocol->modifiers;
+	unsigned long *modifiers =
+			(unsigned long *)&keyboard_protocol->modifiers;
 
 	if (!fnremap || fnremap > ARRAY_SIZE(applespi_controlcodes) ||
 	    !applespi_controlcodes[fnremap - 1])
