@@ -136,8 +136,8 @@ static unsigned int fnremap;
 module_param(fnremap, uint, 0644);
 MODULE_PARM_DESC(fnremap, "Remap Fn key ([0] = no-remap; 1 = left-ctrl, 2 = left-shift, 3 = left-alt, 4 = left-meta, 6 = right-shift, 7 = right-alt, 8 = right-meta)");
 
-static unsigned int iso_layout;
-module_param(iso_layout, uint, 0644);
+static bool iso_layout;
+module_param(iso_layout, bool, 0644);
 MODULE_PARM_DESC(iso_layout, "Enable/Disable hardcoded ISO-layout of the keyboard. ([0] = disabled, 1 = enabled)");
 
 static unsigned int debug;
