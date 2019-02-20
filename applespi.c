@@ -2035,6 +2035,7 @@ static int applespi_poweroff_late(struct device *dev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int applespi_suspend(struct device *dev)
 {
 	struct spi_device *spi = to_spi_device(dev);
@@ -2098,6 +2099,7 @@ static int applespi_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
 static const struct acpi_device_id applespi_acpi_match[] = {
 	{ "APP000D", 0 },
