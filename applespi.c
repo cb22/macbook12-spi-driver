@@ -1217,8 +1217,8 @@ static void report_tp_state(struct applespi_data *applespi,
 	input_sync(input);
 }
 
-static const struct applespi_key_translation *applespi_find_translation(
-		const struct applespi_key_translation *table, u16 key)
+static const struct applespi_key_translation *
+applespi_find_translation(const struct applespi_key_translation *table, u16 key)
 {
 	const struct applespi_key_translation *trans;
 
@@ -1271,8 +1271,8 @@ static unsigned int applespi_code_to_key(u8 code, int fn_pressed)
 	return key;
 }
 
-static void applespi_remap_fn_key(struct keyboard_protocol
-							*keyboard_protocol)
+static void
+applespi_remap_fn_key(struct keyboard_protocol *keyboard_protocol)
 {
 	unsigned char tmp;
 	unsigned long *modifiers = (unsigned long *)
@@ -1290,9 +1290,9 @@ static void applespi_remap_fn_key(struct keyboard_protocol
 		__clear_bit(fnremap - 1, modifiers);
 }
 
-static void applespi_handle_keyboard_event(struct applespi_data *applespi,
-					   struct keyboard_protocol
-							*keyboard_protocol)
+static void
+applespi_handle_keyboard_event(struct applespi_data *applespi,
+			       struct keyboard_protocol *keyboard_protocol)
 {
 	int i, j;
 	unsigned int key;
@@ -1386,8 +1386,9 @@ static const struct applespi_tp_info *applespi_find_touchpad_info(__u8 model)
 	return NULL;
 }
 
-static int applespi_register_touchpad_device(struct applespi_data *applespi,
-				struct touchpad_info_protocol *rcvd_tp_info)
+static int
+applespi_register_touchpad_device(struct applespi_data *applespi,
+				  struct touchpad_info_protocol *rcvd_tp_info)
 {
 	const struct applespi_tp_info *tp_info;
 	struct input_dev *touchpad_input_dev;
