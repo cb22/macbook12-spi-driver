@@ -1844,9 +1844,9 @@ static int applespi_probe(struct spi_device *spi)
 					   GFP_KERNEL);
 	applespi->rx_buffer = devm_kmalloc(&spi->dev, APPLESPI_PACKET_SIZE,
 					   GFP_KERNEL);
-	applespi->msg_buf = devm_kmalloc(&spi->dev, MAX_PKTS_PER_MSG *
-						    APPLESPI_PACKET_SIZE,
-					 GFP_KERNEL);
+	applespi->msg_buf = devm_kmalloc_array(&spi->dev, MAX_PKTS_PER_MSG,
+					       APPLESPI_PACKET_SIZE,
+					       GFP_KERNEL);
 
 	if (!applespi->tx_buffer || !applespi->tx_status ||
 	    !applespi->rx_buffer || !applespi->msg_buf)
