@@ -6,7 +6,7 @@
  * Copyright (c) 2017-2018 Ronald Tschalär
  */
 
-/**
+/*
  * The keyboard and touchpad controller on the MacBookAir6, MacBookPro12,
  * MacBook8 and newer can be driven either by USB or SPI. However the USB
  * pins are only connected on the MacBookAir6 and 7 and the MacBookPro12.
@@ -1703,7 +1703,6 @@ static void applespi_got_data(struct applespi_data *applespi)
 	}
 
 cleanup:
-	/* clean up */
 	applespi->saved_msg_len = 0;
 
 	applespi_msg_complete(applespi, packet->flags == PACKET_TYPE_WRITE,
@@ -1953,7 +1952,7 @@ static int applespi_probe(struct spi_device *spi)
 	applespi_init(applespi, false);
 
 	/*
-	 * By default this device is not enable for wakeup; but USB keyboards
+	 * By default this device is not enabled for wakeup; but USB keyboards
 	 * generally are, so the expectation is that by default the keyboard
 	 * will wake the system.
 	 */
@@ -1969,12 +1968,10 @@ static int applespi_probe(struct spi_device *spi)
 	applespi->backlight_info.brightness_set  = applespi_set_bl_level;
 
 	sts = devm_led_classdev_register(&spi->dev, &applespi->backlight_info);
-	if (sts) {
+	if (sts)
 		dev_warn(DEV(applespi),
 			 "Unable to register keyboard backlight class dev (%d)\n",
 			 sts);
-		/* not fatal */
-	}
 
 	return 0;
 }
