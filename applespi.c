@@ -517,13 +517,13 @@ static const struct applespi_key_translation applespi_fn_codes[] = {
 	{ KEY_LEFT,	KEY_HOME },
 	{ KEY_DOWN,	KEY_PAGEDOWN },
 	{ KEY_UP,	KEY_PAGEUP },
-	{ },
+	{ }
 };
 
 static const struct applespi_key_translation apple_iso_keyboard[] = {
 	{ KEY_GRAVE,	KEY_102ND },
 	{ KEY_102ND,	KEY_GRAVE },
-	{ },
+	{ }
 };
 
 struct applespi_tp_model_info {
@@ -2105,7 +2105,7 @@ static int applespi_resume(struct device *dev)
 
 static const struct acpi_device_id applespi_acpi_match[] = {
 	{ "APP000D", 0 },
-	{ },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, applespi_acpi_match);
 
