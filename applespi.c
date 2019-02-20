@@ -2526,7 +2526,7 @@ module_spi_driver(applespi_driver)
 
 #endif
 
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("MacBook(Pro) SPI Keyboard/Touchpad driver");
 MODULE_AUTHOR("Federico Lorenzi");
 MODULE_AUTHOR("Ronald Tschalär");
