@@ -1544,7 +1544,7 @@ static bool applespi_verify_crc(struct applespi_data *applespi, u8 *buffer,
 	u16 crc;
 
 	crc = crc16(0, buffer, buflen);
-	if (crc != 0) {
+	if (crc) {
 		dev_warn_ratelimited(DEV(applespi),
 				     "Received corrupted packet (crc mismatch)\n");
 		debug_print_header(DBG_RD_CRC, applespi);
@@ -1676,10 +1676,13 @@ static void applespi_got_data(struct applespi_data *applespi)
 
 	} else if (packet->flags == PACKET_TYPE_READ &&
 		   packet->device == PACKET_DEV_TPAD) {
-		struct touchpad_protocol *tp = &message->touchpad;
+		struct touchpad_protocol *tp;
+		size_t tp_len;
 
-		size_t tp_len = sizeof(*tp) +
-				tp->number_of_fingers * sizeof(tp->fingers[0]);
+		tp = &message->touchpad;
+		tp_len = sizeof(*tp) +
+			 tp->number_of_fingers * sizeof(tp->fingers[0]);
+
 		if (le16_to_cpu(message->length) + 2 != tp_len) {
 			dev_warn_ratelimited(DEV(applespi),
 					     "Received corrupted packet (invalid message length %u - num-fingers %u, tp-len %zu)\n",
