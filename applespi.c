@@ -595,7 +595,7 @@ static const char *applespi_debug_facility(unsigned int log_mask)
 	case DBG_TP_DIM:
 		return "Touchpad Dimensions";
 	default:
-		return "-Unknown-";
+		return "-Unrecognized log mask-";
 	}
 }
 
@@ -1103,7 +1103,7 @@ static int applespi_event(struct input_dev *dev, unsigned int type,
 		return 0;
 	}
 
-	return -1;
+	return -EINVAL;
 }
 
 /* lifted from the BCM5974 driver */
@@ -1386,7 +1386,7 @@ static const struct applespi_tp_info *applespi_find_touchpad_info(__u8 model)
 	return NULL;
 }
 
-static void applespi_register_touchpad_device(struct applespi_data *applespi,
+static int applespi_register_touchpad_device(struct applespi_data *applespi,
 				struct touchpad_info_protocol *rcvd_tp_info)
 {
 	const struct applespi_tp_info *tp_info;
@@ -1436,7 +1436,7 @@ static void applespi_register_touchpad_device(struct applespi_data *applespi,
 	if (!touchpad_input_dev) {
 		dev_err(DEV(applespi),
 			"Failed to allocate touchpad input device\n");
-		return;
+		return -ENOMEM;
 	}
 
 	touchpad_input_dev->name = "Apple SPI Touchpad";
@@ -1492,11 +1492,13 @@ static void applespi_register_touchpad_device(struct applespi_data *applespi,
 	if (sts) {
 		dev_err(DEV(applespi),
 			"Unable to register touchpad input device (%d)\n", sts);
-		return;
+		return sts;
 	}
 
 	/* touchpad_input_dev is read async in spi callback */
 	smp_store_release(&applespi->touchpad_input_dev, touchpad_input_dev);
+
+	return 0;
 }
 
 static void applespi_worker(struct work_struct *work)
@@ -1762,7 +1764,7 @@ static int applespi_get_saved_bl_level(struct applespi_data *applespi)
 
 	efivar_entry = kmalloc(sizeof(*efivar_entry), GFP_KERNEL);
 	if (!efivar_entry)
-		return -1;
+		return -ENOMEM;
 
 	memcpy(efivar_entry->var.VariableName, EFI_BL_LEVEL_NAME,
 	       sizeof(EFI_BL_LEVEL_NAME));
@@ -1777,7 +1779,7 @@ static int applespi_get_saved_bl_level(struct applespi_data *applespi)
 
 	kfree(efivar_entry);
 
-	return efi_data;
+	return sts ? sts : efi_data;
 }
 
 static void applespi_save_bl_level(struct applespi_data *applespi,
