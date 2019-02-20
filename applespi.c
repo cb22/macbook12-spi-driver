@@ -58,6 +58,7 @@
 #include <linux/workqueue.h>
 
 #include <asm/barrier.h>
+#include <asm-generic/unaligned.h>
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
 #define PRE_SPI_PROPERTIES
@@ -1014,7 +1015,7 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 		message->rsp_buf_len = message->length;
 
 	crc = crc16(0, (u8 *)message, le16_to_cpu(packet->length) - 2);
-	*((__le16 *)&message->data[msg_len - 2]) = cpu_to_le16(crc);
+	put_unaligned_le16(crc, &message->data[msg_len - 2]);
 
 	crc = crc16(0, (u8 *)packet, sizeof(*packet) - 2);
 	packet->crc16 = cpu_to_le16(crc);
