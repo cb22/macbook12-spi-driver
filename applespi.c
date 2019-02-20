@@ -1976,12 +1976,10 @@ static int applespi_probe(struct spi_device *spi)
 	return 0;
 }
 
-static int applespi_remove(struct spi_device *spi)
+static void applespi_drain_writes(struct applespi_data *applespi)
 {
-	struct applespi_data *applespi = spi_get_drvdata(spi);
 	unsigned long flags;
 
-	/* wait for all outstanding writes to finish */
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
 	applespi->drain = true;
@@ -1989,18 +1987,33 @@ static int applespi_remove(struct spi_device *spi)
 			    applespi->cmd_msg_lock);
 
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+}
 
-	/* shut things down */
-	acpi_disable_gpe(NULL, applespi->gpe);
-	acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
+static void applespi_drain_reads(struct applespi_data *applespi)
+{
+	unsigned long flags;
 
-	/* wait for all outstanding reads to finish */
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
 	wait_event_lock_irq(applespi->drain_complete, !applespi->read_active,
 			    applespi->cmd_msg_lock);
 
+	applespi->suspended = true;
+
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+}
+
+static int applespi_remove(struct spi_device *spi)
+{
+	struct applespi_data *applespi = spi_get_drvdata(spi);
+
+	applespi_drain_writes(applespi);
+
+	acpi_disable_gpe(NULL, applespi->gpe);
+	acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
+	device_wakeup_disable(&spi->dev);
+
+	applespi_drain_reads(applespi);
 
 	return 0;
 }
@@ -2027,7 +2040,6 @@ static int applespi_suspend(struct device *dev)
 	struct spi_device *spi = to_spi_device(dev);
 	struct applespi_data *applespi = spi_get_drvdata(spi);
 	acpi_status acpi_sts;
-	unsigned long flags;
 	int sts;
 
 	/* turn off caps-lock - it'll stay on otherwise */
@@ -2036,14 +2048,7 @@ static int applespi_suspend(struct device *dev)
 		dev_warn(DEV(applespi),
 			 "Failed to turn off caps-lock led (%d)\n", sts);
 
-	/* wait for all outstanding writes to finish */
-	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
-
-	applespi->drain = true;
-	wait_event_lock_irq(applespi->drain_complete, !applespi->write_active,
-			    applespi->cmd_msg_lock);
-
-	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+	applespi_drain_writes(applespi);
 
 	/* disable the interrupt */
 	acpi_sts = acpi_disable_gpe(NULL, applespi->gpe);
@@ -2052,15 +2057,7 @@ static int applespi_suspend(struct device *dev)
 			"Failed to disable GPE handler for GPE %d: %s\n",
 			applespi->gpe, acpi_format_exception(acpi_sts));
 
-	/* wait for all outstanding reads to finish */
-	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
-
-	wait_event_lock_irq(applespi->drain_complete, !applespi->read_active,
-			    applespi->cmd_msg_lock);
-
-	applespi->suspended = true;
-
-	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+	applespi_drain_reads(applespi);
 
 	return 0;
 }
