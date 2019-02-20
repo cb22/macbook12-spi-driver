@@ -245,17 +245,20 @@ struct command_protocol_tp_info {
  * message.type = 0x1020, message.length = 0x006e
  *
  * @unknown1:		unknown
- * @model_id:		the touchpad model number
+ * @model_flags:	flags (vary by model number, but significance otherwise
+ * 			unknown)
+ * @model_no:		the touchpad model number
  * @unknown2:		unknown
  * @crc16:		crc over the whole message struct (message header +
  *			this struct) minus this @crc16 field
  */
 struct touchpad_info_protocol {
 	__u8			unknown1[105];
-	__le16			model_id;
+	__u8			model_flags;
+	__u8			model_no;
 	__u8			unknown2[3];
 	__le16			crc16;
-} __packed;
+};
 
 /**
  * struct command_protocol_mt_init - initialize multitouch.
@@ -530,15 +533,15 @@ struct applespi_tp_model_info {
 
 static const struct applespi_tp_model_info applespi_tp_models[] = {
 	{
-		.model = 0x0417,	/* MB8 MB9 MB10 */
+		.model = 0x04,	/* MB8 MB9 MB10 */
 		.tp_info = { -5087, -182, 5579, 6089 },
 	},
 	{
-		.model = 0x0557,	/* MBP13,1 MBP13,2 MBP14,1 MBP14,2 */
+		.model = 0x05,	/* MBP13,1 MBP13,2 MBP14,1 MBP14,2 */
 		.tp_info = { -6243, -170, 6749, 7685 },
 	},
 	{
-		.model = 0x06d7,	/* MBP13,3 MBP14,3 */
+		.model = 0x06,	/* MBP13,3 MBP14,3 */
 		.tp_info = { -7456, -163, 7976, 9283 },
 	},
 	{}
@@ -1358,7 +1361,7 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 	       sizeof(applespi->last_keys_pressed));
 }
 
-static const struct applespi_tp_info *applespi_find_touchpad_info(u16 model)
+static const struct applespi_tp_info *applespi_find_touchpad_info(__u8 model)
 {
 	const struct applespi_tp_model_info *info;
 
@@ -1378,11 +1381,11 @@ static void applespi_register_touchpad_device(struct applespi_data *applespi,
 	int sts;
 
 	/* set up touchpad dimensions */
-	tp_info = applespi_find_touchpad_info(rcvd_tp_info->model_id);
+	tp_info = applespi_find_touchpad_info(rcvd_tp_info->model_no);
 	if (!tp_info) {
 		dev_warn(DEV(applespi),
 			 "Unknown touchpad model %x - falling back to MB8 touchpad\n",
-			 rcvd_tp_info->model_id);
+			 rcvd_tp_info->model_no);
 		tp_info = &applespi_tp_models[0].tp_info;
 	}
 
@@ -1428,7 +1431,8 @@ static void applespi_register_touchpad_device(struct applespi_data *applespi,
 	touchpad_input_dev->dev.parent = DEV(applespi);
 	touchpad_input_dev->id.bustype = BUS_SPI;
 	touchpad_input_dev->id.vendor = SYNAPTICS_VENDOR_ID;
-	touchpad_input_dev->id.product = rcvd_tp_info->model_id;
+	touchpad_input_dev->id.product =
+			rcvd_tp_info->model_no << 8 | rcvd_tp_info->model_flags;
 
 	/* basic properties */
 	input_set_capability(touchpad_input_dev, EV_REL, REL_X);
