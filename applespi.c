@@ -668,20 +668,20 @@ static int applespi_async(struct applespi_data *applespi,
 static inline bool applespi_check_write_status(struct applespi_data *applespi,
 					       int sts)
 {
-	static u8 sts_ok[] = { 0xac, 0x27, 0x68, 0xd5 };
-	bool ret = true;
+	static u8 status_ok[] = { 0xac, 0x27, 0x68, 0xd5 };
 
 	if (sts < 0) {
-		ret = false;
 		dev_warn(DEV(applespi), "Error writing to device: %d\n", sts);
-	} else if (memcmp(applespi->tx_status, sts_ok,
-			  APPLESPI_STATUS_SIZE) != 0) {
-		ret = false;
-		dev_warn(DEV(applespi), "Error writing to device: %*ph\n",
-			 APPLESPI_STATUS_SIZE, applespi->tx_status);
+		return false;
 	}
 
-	return ret;
+	if (memcmp(applespi->tx_status, status_ok, APPLESPI_STATUS_SIZE)) {
+		dev_warn(DEV(applespi), "Error writing to device: %*ph\n",
+			 APPLESPI_STATUS_SIZE, applespi->tx_status);
+		return false;
+	}
+
+	return true;
 }
 
 #ifdef PRE_SPI_PROPERTIES
@@ -1024,12 +1024,13 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	if (sts) {
 		dev_warn(DEV(applespi),
 			 "Error queueing async write to device: %d\n", sts);
-	} else {
-		applespi->cmd_msg_queued = true;
-		applespi->write_active = true;
+		return sts;
 	}
 
-	return sts;
+	applespi->cmd_msg_queued = true;
+	applespi->write_active = true;
+
+	return 0;
 }
 
 static void applespi_init(struct applespi_data *applespi, bool is_resume)
@@ -1038,10 +1039,10 @@ static void applespi_init(struct applespi_data *applespi, bool is_resume)
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
-	if (!is_resume)
-		applespi->want_tp_info_cmd = true;
-	else
+	if (is_resume)
 		applespi->want_mt_init_cmd = true;
+	else
+		applespi->want_tp_info_cmd = true;
 	applespi_send_cmd_msg(applespi);
 
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
@@ -1313,13 +1314,13 @@ static void applespi_handle_keyboard_event(struct applespi_data *applespi,
 			}
 		}
 
-		if (!still_pressed) {
-			key = applespi_code_to_key(
-					applespi->last_keys_pressed[i],
-					applespi->last_keys_fn_pressed[i]);
-			input_report_key(applespi->keyboard_input_dev, key, 0);
-			applespi->last_keys_fn_pressed[i] = 0;
-		}
+		if (still_pressed)
+			continue;
+
+		key = applespi_code_to_key(applespi->last_keys_pressed[i],
+					   applespi->last_keys_fn_pressed[i]);
+		input_report_key(applespi->keyboard_input_dev, key, 0);
+		applespi->last_keys_fn_pressed[i] = 0;
 	}
 
 	/* check pressed keys */
@@ -1479,10 +1480,11 @@ static void applespi_register_touchpad_device(struct applespi_data *applespi,
 	if (sts) {
 		dev_err(DEV(applespi),
 			"Unable to register touchpad input device (%d)\n", sts);
-	else
-		/* touchpad_input_dev is read async in spi callback */
-		smp_store_release(&applespi->touchpad_input_dev,
-				  touchpad_input_dev);
+		return;
+	}
+
+	/* touchpad_input_dev is read async in spi callback */
+	smp_store_release(&applespi->touchpad_input_dev, touchpad_input_dev);
 }
 
 static void applespi_worker(struct work_struct *work)
