@@ -1008,7 +1008,7 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	packet->device = device;
 	packet->length = cpu_to_le16(MSG_HEADER_SIZE + msg_len);
 
-	message->counter = applespi->cmd_msg_cntr++ & 0xff;
+	message->counter = applespi->cmd_msg_cntr++ % (U8_MAX + 1);
 
 	message->length = cpu_to_le16(msg_len - 2);
 	if (!message->rsp_buf_len)
