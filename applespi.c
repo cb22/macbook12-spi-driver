@@ -1107,9 +1107,9 @@ static int applespi_event(struct input_dev *dev, unsigned int type,
 	return -EINVAL;
 }
 
-/* lifted from the BCM5974 driver */
+/* lifted from the BCM5974 driver and renamed from raw2int */
 /* convert 16-bit little endian to signed integer */
-static inline int raw2int(__le16 x)
+static inline int le16_to_int(__le16 x)
 {
 	return (signed short)le16_to_cpu(x);
 }
@@ -1124,8 +1124,8 @@ static void applespi_debug_update_dimensions(const struct tp_finger *f)
 {
 	#define UPDATE_DIMENSIONS(val, op, last) \
 		do { \
-			if (raw2int(val) op last) { \
-				last = raw2int(val); \
+			if (le16_to_int(val) op last) { \
+				last = le16_to_int(val); \
 				applespi_dbg_dim_updated = true; \
 			} \
 		} while (0)
@@ -1162,15 +1162,15 @@ static void report_finger_data(struct input_dev *input, int slot,
 	input_mt_report_slot_state(input, MT_TOOL_FINGER, true);
 
 	input_report_abs(input, ABS_MT_TOUCH_MAJOR,
-			 raw2int(f->touch_major) << 1);
+			 le16_to_int(f->touch_major) << 1);
 	input_report_abs(input, ABS_MT_TOUCH_MINOR,
-			 raw2int(f->touch_minor) << 1);
+			 le16_to_int(f->touch_minor) << 1);
 	input_report_abs(input, ABS_MT_WIDTH_MAJOR,
-			 raw2int(f->tool_major) << 1);
+			 le16_to_int(f->tool_major) << 1);
 	input_report_abs(input, ABS_MT_WIDTH_MINOR,
-			 raw2int(f->tool_minor) << 1);
+			 le16_to_int(f->tool_minor) << 1);
 	input_report_abs(input, ABS_MT_ORIENTATION,
-			 MAX_FINGER_ORIENTATION - raw2int(f->orientation));
+			 MAX_FINGER_ORIENTATION - le16_to_int(f->orientation));
 	input_report_abs(input, ABS_MT_POSITION_X, pos->x);
 	input_report_abs(input, ABS_MT_POSITION_Y, pos->y);
 }
@@ -1192,11 +1192,11 @@ static void report_tp_state(struct applespi_data *applespi,
 
 	for (i = 0; i < t->number_of_fingers; i++) {
 		f = &t->fingers[i];
-		if (raw2int(f->touch_major) == 0)
+		if (le16_to_int(f->touch_major) == 0)
 			continue;
-		applespi->pos[n].x = raw2int(f->abs_x);
+		applespi->pos[n].x = le16_to_int(f->abs_x);
 		applespi->pos[n].y = tp_info->y_min + tp_info->y_max -
-				     raw2int(f->abs_y);
+				     le16_to_int(f->abs_y);
 		n++;
 
 		if (debug & DBG_TP_DIM)
