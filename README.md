@@ -35,6 +35,19 @@ git clone https://github.com/roadrunner2/macbook12-spi-driver.git /usr/src/apple
 dkms install -m applespi -v 0.1
 ```
 
+Akmods module (RPM Fusion / Red Hat & co):
+------------------------------------------
+You can build the akmod package from this repository:
+
+https://pagure.io/fedora-macbook12-spi-driver-kmod
+
+Or use this [copr repository](https://copr.fedorainfracloud.org/coprs/meeuw/macbook12-spi-driver-kmod/):
+```
+$ dnf copr enable meeuw/macbook12-spi-driver-kmod
+
+$ dnf install macbook12-spi-driver-kmod
+```
+
 What works:
 -----------
 * Basic Typing
