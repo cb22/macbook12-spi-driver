@@ -244,7 +244,7 @@ struct command_protocol_tp_info {
  *
  * @unknown1:		unknown
  * @model_flags:	flags (vary by model number, but significance otherwise
- * 			unknown)
+ *			unknown)
  * @model_no:		the touchpad model number
  * @unknown2:		unknown
  * @crc16:		crc over the whole message struct (message header +
@@ -1082,9 +1082,9 @@ static void applespi_set_bl_level(struct led_classdev *led_cdev,
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
-	if (value == 0)
+	if (value == 0) {
 		applespi->want_bl_level = value;
-	else
+	} else {
 		/*
 		 * The backlight does not turn on till level 32, so we scale
 		 * the range here so that from a user's perspective it turns
@@ -1093,6 +1093,7 @@ static void applespi_set_bl_level(struct led_classdev *led_cdev,
 		applespi->want_bl_level =
 			((value * KBD_BL_LEVEL_ADJ) / KBD_BL_LEVEL_SCALE +
 			 KBD_BL_LEVEL_MIN);
+	}
 
 	sts = applespi_send_cmd_msg(applespi);
 
