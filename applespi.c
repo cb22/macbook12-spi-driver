@@ -394,6 +394,7 @@ struct spi_settings {
 	u64	reset_rec_usec;		/* ? (cur val: 10) */
 };
 
+/* this mimics struct drm_rect */
 struct applespi_tp_info {
 	int	x_min;
 	int	y_min;
