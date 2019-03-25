@@ -78,7 +78,6 @@
 #define PACKET_DEV_INFO		0xd0
 
 #define MAX_ROLLOVER		6
-#define MAX_MODIFIERS		8
 
 #define MAX_FINGERS		11
 #define MAX_FINGER_ORIENTATION	16384
@@ -480,6 +479,10 @@ static const unsigned char applespi_scancodes[] = {
 	0, KEY_KATAKANAHIRAGANA, KEY_MUHENKAN
 };
 
+/*
+ * This must have exactly as many entries as there are bits in
+ * struct keyboard_protocol.modifiers .
+ */
 static const unsigned char applespi_controlcodes[] = {
 	KEY_LEFTCTRL,
 	KEY_LEFTSHIFT,
@@ -1279,19 +1282,18 @@ static void
 applespi_remap_fn_key(struct keyboard_protocol *keyboard_protocol)
 {
 	unsigned char tmp;
-	unsigned long *modifiers =
-			(unsigned long *)&keyboard_protocol->modifiers;
 
 	if (!fnremap || fnremap > ARRAY_SIZE(applespi_controlcodes) ||
 	    !applespi_controlcodes[fnremap - 1])
 		return;
 
 	tmp = keyboard_protocol->fn_pressed;
-	keyboard_protocol->fn_pressed = test_bit(fnremap - 1, modifiers);
+	keyboard_protocol->fn_pressed =
+			!!(keyboard_protocol->modifiers & BIT(fnremap - 1));
 	if (tmp)
-		__set_bit(fnremap - 1, modifiers);
+		keyboard_protocol->modifiers |= BIT(fnremap - 1);
 	else
-		__clear_bit(fnremap - 1, modifiers);
+		keyboard_protocol->modifiers &= ~BIT(fnremap - 1);
 }
 
 static void
@@ -1302,6 +1304,10 @@ applespi_handle_keyboard_event(struct applespi_data *applespi,
 	unsigned int key;
 	bool still_pressed;
 	bool is_overflow;
+
+	compiletime_assert(ARRAY_SIZE(applespi_controlcodes) ==
+			   sizeof_field(struct keyboard_protocol, modifiers) * 8,
+			   "applespi_controlcodes has wrong number of entries");
 
 	/* check for rollover overflow, which is signalled by all keys == 1 */
 	is_overflow = true;
@@ -1354,10 +1360,8 @@ applespi_handle_keyboard_event(struct applespi_data *applespi,
 	}
 
 	/* check control keys */
-	for (i = 0; i < MAX_MODIFIERS; i++) {
-		u8 *modifiers = &keyboard_protocol->modifiers;
-
-		if (test_bit(i, (unsigned long *)modifiers))
+	for (i = 0; i < ARRAY_SIZE(applespi_controlcodes); i++) {
+		if (keyboard_protocol->modifiers & BIT(i))
 			input_report_key(applespi->keyboard_input_dev,
 					 applespi_controlcodes[i], 1);
 		else
