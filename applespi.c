@@ -1418,8 +1418,8 @@ applespi_register_touchpad_device(struct applespi_data *applespi,
 	if (touchpad_dimensions[0]) {
 		int x, y, w, h;
 
-		if (sscanf(touchpad_dimensions, "%dx%d+%u+%u", &x, &y, &w, &h)
-				== 4) {
+		sts = sscanf(touchpad_dimensions, "%dx%d+%u+%u", &x, &y, &w, &h);
+		if (sts == 4) {
 			dev_info(&(applespi)->spi->dev,
 				 "Overriding touchpad dimensions from module param\n");
 			applespi->tp_info.x_min = x;
