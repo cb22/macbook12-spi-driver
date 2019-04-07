@@ -58,7 +58,7 @@
 #include <linux/workqueue.h>
 
 #include <asm/barrier.h>
-#include <asm-generic/unaligned.h>
+#include <asm/unaligned.h>
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
 #define PRE_SPI_PROPERTIES
