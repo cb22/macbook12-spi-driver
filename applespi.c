@@ -60,6 +60,10 @@
 #include <asm/barrier.h>
 #include <asm/unaligned.h>
 
+#define CREATE_TRACE_POINTS
+#include "applespi.h"
+#include "applespi_trace.h"
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
 #define PRE_SPI_PROPERTIES
 #endif
@@ -92,33 +96,6 @@
 #define EFI_BL_LEVEL_NAME	L"KeyboardBacklightLevel"
 #define EFI_BL_LEVEL_GUID	EFI_GUID(0xa076d2af, 0x9678, 0x4386, 0x8b, 0x58, 0x1f, 0xc8, 0xef, 0x04, 0x16, 0x19)
 
-#define DBG_CMD_TP_INI		BIT(0)
-#define DBG_CMD_BL		BIT(1)
-#define DBG_CMD_CL		BIT(2)
-#define DBG_RD_KEYB		BIT(8)
-#define DBG_RD_TPAD		BIT(9)
-#define DBG_RD_UNKN		BIT(10)
-#define DBG_RD_IRQ		BIT(11)
-#define DBG_RD_CRC		BIT(12)
-
-#define	debug_print(mask, applespi, fmt, ...) \
-	do { \
-		if (debug & (mask)) \
-			dev_printk(KERN_DEBUG, &(applespi)->spi->dev, fmt, \
-				   ##__VA_ARGS__); \
-	} while (0)
-
-#define	debug_print_header(mask, applespi) \
-	debug_print(mask, applespi, "--- %s ---------------------------\n", \
-		    applespi_debug_facility(mask))
-
-#define	debug_print_buffer(mask, applespi, fmt, buf, len) \
-	do { \
-		if (debug & (mask)) \
-			dev_print_hex_dump(KERN_DEBUG, &(applespi)->spi->dev, \
-					   fmt, 32, 1, buf, len, false); \
-	} while (0)
-
 #define APPLE_FLAG_FKEY		0x01
 
 #define SPI_RW_CHG_DELAY_US	100	/* from experimentation, in µs */
@@ -136,10 +113,6 @@ MODULE_PARM_DESC(fnremap, "Remap Fn key ([0] = no-remap; 1 = left-ctrl, 2 = left
 static bool iso_layout;
 module_param(iso_layout, bool, 0644);
 MODULE_PARM_DESC(iso_layout, "Enable/Disable hardcoded ISO-layout of the keyboard. ([0] = disabled, 1 = enabled)");
-
-static unsigned int debug;
-module_param(debug, uint, 0644);
-MODULE_PARM_DESC(debug, "Enable/Disable debug logging. This is a bitmask.");
 
 static char touchpad_dimensions[40];
 module_param_string(touchpad_dimensions, touchpad_dimensions,
@@ -446,7 +419,7 @@ struct applespi_data {
 	/* lock to protect the above parameters and flags below */
 	spinlock_t			cmd_msg_lock;
 	bool				cmd_msg_queued;
-	unsigned int			cmd_log_mask;
+	enum applespi_evt_type		cmd_evt_type;
 
 	struct led_classdev		backlight_info;
 
@@ -557,53 +530,27 @@ static const struct applespi_tp_model_info applespi_tp_models[] = {
 	{}
 };
 
-/**
- * This is a reduced version of print_hex_dump() that uses dev_printk().
- */
-static void dev_print_hex_dump(const char *level, const struct device *dev,
-			       const char *prefix_str,
-			       int rowsize, int groupsize,
-			       const void *buf, size_t len, bool ascii)
+typedef void (*applespi_trace_fun)(enum applespi_evt_type,
+				   enum applespi_pkt_type, u8 *, size_t);
+
+static applespi_trace_fun applespi_get_trace_fun(enum applespi_evt_type type)
 {
-	const u8 *ptr = buf;
-	int i, linelen, remaining = len;
-	unsigned char linebuf[32 * 3 + 2 + 32 + 1];
-
-	if (rowsize != 16 && rowsize != 32)
-		rowsize = 16;
-
-	for (i = 0; i < len; i += rowsize) {
-		linelen = min(remaining, rowsize);
-		remaining -= rowsize;
-
-		hex_dump_to_buffer(ptr + i, linelen, rowsize, groupsize,
-				   linebuf, sizeof(linebuf), ascii);
-
-		dev_printk(level, dev, "%s%s\n", prefix_str, linebuf);
-	}
-}
-
-static const char *applespi_debug_facility(unsigned int log_mask)
-{
-	switch (log_mask) {
-	case DBG_CMD_TP_INI:
-		return "Touchpad Initialization";
-	case DBG_CMD_BL:
-		return "Backlight Command";
-	case DBG_CMD_CL:
-		return "Caps-Lock Command";
-	case DBG_RD_KEYB:
-		return "Keyboard Event";
-	case DBG_RD_TPAD:
-		return "Touchpad Event";
-	case DBG_RD_UNKN:
-		return "Unknown Event";
-	case DBG_RD_IRQ:
-		return "Interrupt Request";
-	case DBG_RD_CRC:
-		return "Corrupted packet";
+	switch (type) {
+	case ET_CMD_TP_INI:
+		return trace_applespi_tp_ini_cmd;
+	case ET_CMD_BL:
+		return trace_applespi_backlight_cmd;
+	case ET_CMD_CL:
+		return trace_applespi_caps_lock_cmd;
+	case ET_RD_KEYB:
+		return trace_applespi_keyboard_data;
+	case ET_RD_TPAD:
+		return trace_applespi_touchpad_data;
+	case ET_RD_UNKN:
+		return trace_applespi_unknown_data;
 	default:
-		return "-Unrecognized log mask-";
+		WARN_ONCE(1, "Unknown msg type %d", type);
+		return trace_applespi_unknown_data;
 	}
 }
 
@@ -913,12 +860,14 @@ static void applespi_msg_complete(struct applespi_data *applespi,
 static void applespi_async_write_complete(void *context)
 {
 	struct applespi_data *applespi = context;
+	enum applespi_evt_type evt_type = applespi->cmd_evt_type;
 
-	debug_print_header(applespi->cmd_log_mask, applespi);
-	debug_print_buffer(applespi->cmd_log_mask, applespi, "write  ",
-			   applespi->tx_buffer, APPLESPI_PACKET_SIZE);
-	debug_print_buffer(applespi->cmd_log_mask, applespi, "status ",
-			   applespi->tx_status, APPLESPI_STATUS_SIZE);
+	applespi_get_trace_fun(evt_type)(evt_type, PT_WRITE,
+					 applespi->tx_buffer,
+					 APPLESPI_PACKET_SIZE);
+	applespi_get_trace_fun(evt_type)(evt_type, PT_STATUS,
+					 applespi->tx_status,
+					 APPLESPI_STATUS_SIZE);
 
 	if (!applespi_check_write_status(applespi, applespi->wr_m.status)) {
 		/*
@@ -953,7 +902,7 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	if (applespi->want_tp_info_cmd) {
 		applespi->want_tp_info_cmd = false;
 		applespi->want_mt_init_cmd = true;
-		applespi->cmd_log_mask = DBG_CMD_TP_INI;
+		applespi->cmd_evt_type = ET_CMD_TP_INI;
 
 		/* build init command */
 		device = PACKET_DEV_INFO;
@@ -966,7 +915,7 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 
 	} else if (applespi->want_mt_init_cmd) {
 		applespi->want_mt_init_cmd = false;
-		applespi->cmd_log_mask = DBG_CMD_TP_INI;
+		applespi->cmd_evt_type = ET_CMD_TP_INI;
 
 		/* build init command */
 		device = PACKET_DEV_TPAD;
@@ -979,7 +928,7 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	/* do we need caps-lock command? */
 	} else if (applespi->want_cl_led_on != applespi->have_cl_led_on) {
 		applespi->have_cl_led_on = applespi->want_cl_led_on;
-		applespi->cmd_log_mask = DBG_CMD_CL;
+		applespi->cmd_evt_type = ET_CMD_CL;
 
 		/* build led command */
 		device = PACKET_DEV_KEYB;
@@ -993,7 +942,7 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	/* do we need backlight command? */
 	} else if (applespi->want_bl_level != applespi->have_bl_level) {
 		applespi->have_bl_level = applespi->want_bl_level;
-		applespi->cmd_log_mask = DBG_CMD_BL;
+		applespi->cmd_evt_type = ET_CMD_BL;
 
 		/* build command buffer */
 		device = PACKET_DEV_KEYB;
@@ -1568,9 +1517,7 @@ static bool applespi_verify_crc(struct applespi_data *applespi, u8 *buffer,
 	if (crc) {
 		dev_warn_ratelimited(&(applespi)->spi->dev,
 				     "Received corrupted packet (crc mismatch)\n");
-		debug_print_header(DBG_RD_CRC, applespi);
-		debug_print_buffer(DBG_RD_CRC, applespi, "read   ", buffer,
-				   buflen);
+		trace_applespi_bad_crc(ET_RD_CRC, READ, buffer, buflen);
 
 		return false;
 	}
@@ -1581,22 +1528,21 @@ static bool applespi_verify_crc(struct applespi_data *applespi, u8 *buffer,
 static void applespi_debug_print_read_packet(struct applespi_data *applespi,
 					     struct spi_packet *packet)
 {
-	unsigned int dbg_mask;
+	unsigned int evt_type;
 
 	if (packet->flags == PACKET_TYPE_READ &&
 	    packet->device == PACKET_DEV_KEYB)
-		dbg_mask = DBG_RD_KEYB;
+		evt_type = ET_RD_KEYB;
 	else if (packet->flags == PACKET_TYPE_READ &&
 		 packet->device == PACKET_DEV_TPAD)
-		dbg_mask = DBG_RD_TPAD;
+		evt_type = ET_RD_TPAD;
 	else if (packet->flags == PACKET_TYPE_WRITE)
-		dbg_mask = applespi->cmd_log_mask;
+		evt_type = applespi->cmd_evt_type;
 	else
-		dbg_mask = DBG_RD_UNKN;
+		evt_type = ET_RD_UNKN;
 
-	debug_print_header(dbg_mask, applespi);
-	debug_print_buffer(dbg_mask, applespi, "read   ", applespi->rx_buffer,
-			   APPLESPI_PACKET_SIZE);
+	applespi_get_trace_fun(evt_type)(evt_type, PT_READ, applespi->rx_buffer,
+					 APPLESPI_PACKET_SIZE);
 }
 
 static void applespi_got_data(struct applespi_data *applespi)
@@ -1760,7 +1706,7 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 	int sts;
 	unsigned long flags;
 
-	debug_print_header(DBG_RD_IRQ, applespi);
+	trace_applespi_irq_received(ET_RD_IRQ, PT_READ);
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
