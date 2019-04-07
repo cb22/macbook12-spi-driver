@@ -43,11 +43,11 @@
 
 #include <linux/acpi.h>
 #include <linux/crc16.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/efi.h>
 #include <linux/input.h>
 #include <linux/input/mt.h>
-#include <linux/ktime.h>
 #include <linux/leds.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
@@ -100,7 +100,6 @@
 #define DBG_RD_UNKN		BIT(10)
 #define DBG_RD_IRQ		BIT(11)
 #define DBG_RD_CRC		BIT(12)
-#define DBG_TP_DIM		BIT(16)
 
 #define	debug_print(mask, applespi, fmt, ...) \
 	do { \
@@ -459,6 +458,14 @@ struct applespi_data {
 
 	struct work_struct		work;
 	struct touchpad_info_protocol	rcvd_tp_info;
+
+	struct dentry			*debugfs_root;
+	bool				debug_tp_dim;
+	char				tp_dim_val[40];
+	int				tp_dim_min_x;
+	int				tp_dim_max_x;
+	int				tp_dim_min_y;
+	int				tp_dim_max_y;
 };
 
 static const unsigned char applespi_scancodes[] = {
@@ -595,8 +602,6 @@ static const char *applespi_debug_facility(unsigned int log_mask)
 		return "Interrupt Request";
 	case DBG_RD_CRC:
 		return "Corrupted packet";
-	case DBG_TP_DIM:
-		return "Touchpad Dimensions";
 	default:
 		return "-Unrecognized log mask-";
 	}
@@ -1122,45 +1127,54 @@ static inline int le16_to_int(__le16 x)
 	return (signed short)le16_to_cpu(x);
 }
 
-static int applespi_dbg_dim_min_x;
-static int applespi_dbg_dim_max_x;
-static int applespi_dbg_dim_min_y;
-static int applespi_dbg_dim_max_y;
-static bool applespi_dbg_dim_updated;
-
-static void applespi_debug_update_dimensions(const struct tp_finger *f)
+static void applespi_debug_update_dimensions(struct applespi_data *applespi,
+					     const struct tp_finger *f)
 {
 	#define UPDATE_DIMENSIONS(val, op, last) \
 		do { \
-			if (le16_to_int(val) op last) { \
+			if (le16_to_int(val) op last) \
 				last = le16_to_int(val); \
-				applespi_dbg_dim_updated = true; \
-			} \
 		} while (0)
 
-	UPDATE_DIMENSIONS(f->abs_x, <, applespi_dbg_dim_min_x);
-	UPDATE_DIMENSIONS(f->abs_x, >, applespi_dbg_dim_max_x);
-	UPDATE_DIMENSIONS(f->abs_y, <, applespi_dbg_dim_min_y);
-	UPDATE_DIMENSIONS(f->abs_y, >, applespi_dbg_dim_max_y);
+	UPDATE_DIMENSIONS(f->abs_x, <, applespi->tp_dim_min_x);
+	UPDATE_DIMENSIONS(f->abs_x, >, applespi->tp_dim_max_x);
+	UPDATE_DIMENSIONS(f->abs_y, <, applespi->tp_dim_min_y);
+	UPDATE_DIMENSIONS(f->abs_y, >, applespi->tp_dim_max_y);
 
 	#undef UPDATE_DIMENSIONS
 }
 
-static void applespi_debug_print_dimensions(struct applespi_data *applespi)
+static int applespi_tp_dim_open(struct inode *inode, struct file *file)
 {
-	static ktime_t last_print;
+	struct applespi_data *applespi = inode->i_private;
 
-	if (applespi_dbg_dim_updated &&
-	    ktime_ms_delta(ktime_get(), last_print) > 1000) {
-		debug_print(DBG_TP_DIM, applespi,
-			    "New touchpad dimensions: %dx%d+%u+%u\n",
-			    applespi_dbg_dim_min_x, applespi_dbg_dim_min_y,
-			    applespi_dbg_dim_max_x - applespi_dbg_dim_min_x,
-			    applespi_dbg_dim_max_y - applespi_dbg_dim_min_y);
-		applespi_dbg_dim_updated = false;
-		last_print = ktime_get();
-	}
+	file->private_data = applespi;
+
+	snprintf(applespi->tp_dim_val, sizeof(applespi->tp_dim_val),
+		 "0x%.4x %dx%d+%u+%u\n",
+		 applespi->touchpad_input_dev->id.product,
+		 applespi->tp_dim_min_x, applespi->tp_dim_min_y,
+		 applespi->tp_dim_max_x - applespi->tp_dim_min_x,
+		 applespi->tp_dim_max_y - applespi->tp_dim_min_y);
+
+	return nonseekable_open(inode, file);
 }
+
+static ssize_t applespi_tp_dim_read(struct file *file, char __user *buf,
+				    size_t len, loff_t *off)
+{
+	struct applespi_data *applespi = file->private_data;
+
+	return simple_read_from_buffer(buf, len, off, applespi->tp_dim_val,
+				       strlen(applespi->tp_dim_val));
+}
+
+static const struct file_operations applespi_tp_dim_fops = {
+	.owner = THIS_MODULE,
+	.open = applespi_tp_dim_open,
+	.read = applespi_tp_dim_read,
+	.llseek = no_llseek,
+};
 
 static void report_finger_data(struct input_dev *input, int slot,
 			       const struct input_mt_pos *pos,
@@ -1207,12 +1221,9 @@ static void report_tp_state(struct applespi_data *applespi,
 				     le16_to_int(f->abs_y);
 		n++;
 
-		if (debug & DBG_TP_DIM)
-			applespi_debug_update_dimensions(f);
+		if (applespi->debug_tp_dim)
+			applespi_debug_update_dimensions(applespi, f);
 	}
-
-	if (debug & DBG_TP_DIM)
-		applespi_debug_print_dimensions(applespi);
 
 	input_mt_assign_slots(input, applespi->slots, applespi->pos, n, 0);
 
@@ -1987,6 +1998,33 @@ static int applespi_probe(struct spi_device *spi)
 			 "Unable to register keyboard backlight class dev (%d)\n",
 			 sts);
 
+	/* set up debugfs entries for touchpad dimensions logging */
+	applespi->debugfs_root = debugfs_create_dir("applespi", NULL);
+	if (IS_ERR(applespi->debugfs_root)) {
+		if (PTR_ERR(applespi->debugfs_root) != -ENODEV)
+			dev_warn(&(applespi)->spi->dev,
+				 "Error creating debugfs root entry (%ld)\n",
+				 PTR_ERR(applespi->debugfs_root));
+	} else {
+		struct dentry *ret;
+
+		ret = debugfs_create_bool("enable_tp_dim", 0600,
+					  applespi->debugfs_root,
+					  &applespi->debug_tp_dim);
+		if (IS_ERR(ret))
+			dev_warn(&(applespi)->spi->dev,
+				 "Error creating debugfs entry enable_tp_dim (%ld)\n",
+				 PTR_ERR(ret));
+
+		ret = debugfs_create_file("tp_dim", 0400,
+					  applespi->debugfs_root, applespi,
+					  &applespi_tp_dim_fops);
+		if (IS_ERR(ret))
+			dev_warn(&(applespi)->spi->dev,
+				 "Error creating debugfs entry tp_dim (%ld)\n",
+				 PTR_ERR(ret));
+	}
+
 	return 0;
 }
 
@@ -2028,6 +2066,8 @@ static int applespi_remove(struct spi_device *spi)
 	device_wakeup_disable(&spi->dev);
 
 	applespi_drain_reads(applespi);
+
+	debugfs_remove_recursive(applespi->debugfs_root);
 
 	return 0;
 }
