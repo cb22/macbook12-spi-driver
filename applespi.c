@@ -394,7 +394,6 @@ struct applespi_data {
 	u8				last_fn_pressed;
 	struct input_mt_pos		pos[MAX_FINGERS];
 	int				slots[MAX_FINGERS];
-	acpi_handle			handle;
 	int				gpe;
 	acpi_handle			sien;
 	acpi_handle			sist;
@@ -782,13 +781,16 @@ static int applespi_get_spi_settings(struct applespi_data *applespi)
 
 #endif
 
-static int applespi_setup_spi(struct applespi_data *applespi)
+static int applespi_setup_spi(struct applespi_data *applespi
+#ifdef PRE_SPI_PROPERTIES
+			      , acpi_handle spi_handle
+#endif
+			      )
 {
 	int sts;
 
 #ifdef PRE_SPI_PROPERTIES
-	sts = applespi_get_spi_settings(applespi->handle,
-					&applespi->spi_settings);
+	sts = applespi_get_spi_settings(spi_handle, &applespi->spi_settings);
 #else
 	sts = applespi_get_spi_settings(applespi);
 #endif
@@ -1777,13 +1779,13 @@ static void applespi_save_bl_level(struct applespi_data *applespi,
 static int applespi_probe(struct spi_device *spi)
 {
 	struct applespi_data *applespi;
+	acpi_handle spi_handle = ACPI_HANDLE(&spi->dev);
 	acpi_status acpi_sts;
 	int sts, i;
 	unsigned long long gpe, usb_status;
 
 	/* check if the USB interface is present and enabled already */
-	acpi_sts = acpi_evaluate_integer(ACPI_HANDLE(&spi->dev), "UIST", NULL,
-					 &usb_status);
+	acpi_sts = acpi_evaluate_integer(spi_handle, "UIST", NULL, &usb_status);
 	if (ACPI_SUCCESS(acpi_sts) && usb_status) {
 		/* let the USB driver take over instead */
 		dev_info(&spi->dev, "USB interface already enabled\n");
@@ -1796,7 +1798,6 @@ static int applespi_probe(struct spi_device *spi)
 		return -ENOMEM;
 
 	applespi->spi = spi;
-	applespi->handle = ACPI_HANDLE(&spi->dev);
 
 	INIT_WORK(&applespi->work, applespi_worker);
 
@@ -1823,9 +1824,9 @@ static int applespi_probe(struct spi_device *spi)
 	applespi_setup_write_txfrs(applespi);
 
 	/* cache ACPI method handles */
-	if (ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIEN",
+	if (ACPI_FAILURE(acpi_get_handle(spi_handle, "SIEN",
 					 &applespi->sien)) ||
-	    ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIST",
+	    ACPI_FAILURE(acpi_get_handle(spi_handle, "SIST",
 					 &applespi->sist))) {
 		dev_err(&applespi->spi->dev,
 			"Failed to get required ACPI method handles\n");
@@ -1833,7 +1834,11 @@ static int applespi_probe(struct spi_device *spi)
 	}
 
 	/* switch on the SPI interface */
-	sts = applespi_setup_spi(applespi);
+	sts = applespi_setup_spi(applespi
+#ifdef PRE_SPI_PROPERTIES
+				 , spi_handle
+#endif
+				 );
 	if (sts)
 		return sts;
 
@@ -1887,7 +1892,7 @@ static int applespi_probe(struct spi_device *spi)
 	 * The applespi device doesn't send interrupts normally (as is described
 	 * in its DSDT), but rather seems to use ACPI GPEs.
 	 */
-	acpi_sts = acpi_evaluate_integer(applespi->handle, "_GPE", NULL, &gpe);
+	acpi_sts = acpi_evaluate_integer(spi_handle, "_GPE", NULL, &gpe);
 	if (ACPI_FAILURE(acpi_sts)) {
 		dev_err(&applespi->spi->dev,
 			"Failed to obtain GPE for SPI slave device: %s\n",
