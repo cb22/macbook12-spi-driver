@@ -1080,18 +1080,10 @@ static inline int le16_to_int(__le16 x)
 static void applespi_debug_update_dimensions(struct applespi_data *applespi,
 					     const struct tp_finger *f)
 {
-	#define UPDATE_DIMENSIONS(val, op, last) \
-		do { \
-			if (le16_to_int(val) op last) \
-				last = le16_to_int(val); \
-		} while (0)
-
-	UPDATE_DIMENSIONS(f->abs_x, <, applespi->tp_dim_min_x);
-	UPDATE_DIMENSIONS(f->abs_x, >, applespi->tp_dim_max_x);
-	UPDATE_DIMENSIONS(f->abs_y, <, applespi->tp_dim_min_y);
-	UPDATE_DIMENSIONS(f->abs_y, >, applespi->tp_dim_max_y);
-
-	#undef UPDATE_DIMENSIONS
+	applespi->tp_dim_min_x = min_t(int, applespi->tp_dim_min_x, f->abs_x);
+	applespi->tp_dim_max_x = max_t(int, applespi->tp_dim_max_x, f->abs_x);
+	applespi->tp_dim_min_y = min_t(int, applespi->tp_dim_min_y, f->abs_y);
+	applespi->tp_dim_max_y = max_t(int, applespi->tp_dim_max_y, f->abs_y);
 }
 
 static int applespi_tp_dim_open(struct inode *inode, struct file *file)
