@@ -1255,26 +1255,20 @@ static void
 applespi_handle_keyboard_event(struct applespi_data *applespi,
 			       struct keyboard_protocol *keyboard_protocol)
 {
-	int i, j;
 	unsigned int key;
-	bool still_pressed;
-	bool is_overflow;
+	int i, j;
 
 	compiletime_assert(ARRAY_SIZE(applespi_controlcodes) ==
 			   sizeof_field(struct keyboard_protocol, modifiers) * 8,
 			   "applespi_controlcodes has wrong number of entries");
 
 	/* check for rollover overflow, which is signalled by all keys == 1 */
-	is_overflow = true;
-
 	for (i = 0; i < MAX_ROLLOVER; i++) {
-		if (keyboard_protocol->keys_pressed[i] != 1) {
-			is_overflow = false;
+		if (keyboard_protocol->keys_pressed[i] != 1)
 			break;
-		}
 	}
 
-	if (is_overflow)
+	if (i == MAX_ROLLOVER)	/* all keys were 1 */
 		return;
 
 	/* remap fn key if desired */
@@ -1282,16 +1276,13 @@ applespi_handle_keyboard_event(struct applespi_data *applespi,
 
 	/* check released keys */
 	for (i = 0; i < MAX_ROLLOVER; i++) {
-		still_pressed = false;
 		for (j = 0; j < MAX_ROLLOVER; j++) {
 			if (applespi->last_keys_pressed[i] ==
-			    keyboard_protocol->keys_pressed[j]) {
-				still_pressed = true;
+			    keyboard_protocol->keys_pressed[j])
 				break;
-			}
 		}
 
-		if (still_pressed)
+		if (j < MAX_ROLLOVER)	/* key is still pressed */
 			continue;
 
 		key = applespi_code_to_key(applespi->last_keys_pressed[i],
