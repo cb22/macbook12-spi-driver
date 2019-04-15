@@ -626,14 +626,13 @@ static inline bool applespi_check_write_status(struct applespi_data *applespi,
 	static u8 status_ok[] = { 0xac, 0x27, 0x68, 0xd5 };
 
 	if (sts < 0) {
-		dev_warn(&(applespi)->spi->dev, "Error writing to device: %d\n",
+		dev_warn(&applespi->spi->dev, "Error writing to device: %d\n",
 			 sts);
 		return false;
 	}
 
 	if (memcmp(applespi->tx_status, status_ok, APPLESPI_STATUS_SIZE)) {
-		dev_warn(&(applespi)->spi->dev,
-			 "Error writing to device: %*ph\n",
+		dev_warn(&applespi->spi->dev, "Error writing to device: %*ph\n",
 			 APPLESPI_STATUS_SIZE, applespi->tx_status);
 		return false;
 	}
@@ -751,29 +750,29 @@ static int applespi_get_spi_settings(acpi_handle handle,
 
 static int applespi_get_spi_settings(struct applespi_data *applespi)
 {
-	struct acpi_device *adev = ACPI_COMPANION(&(applespi)->spi->dev);
+	struct acpi_device *adev = ACPI_COMPANION(&applespi->spi->dev);
 	const union acpi_object *o;
 	struct spi_settings *settings = &applespi->spi_settings;
 
 	if (!acpi_dev_get_property(adev, "spiCSDelay", ACPI_TYPE_BUFFER, &o))
 		settings->spi_cs_delay = *(u64 *)o->buffer.pointer;
 	else
-		dev_warn(&(applespi)->spi->dev,
+		dev_warn(&applespi->spi->dev,
 			 "Property spiCSDelay not found\n");
 
 	if (!acpi_dev_get_property(adev, "resetA2RUsec", ACPI_TYPE_BUFFER, &o))
 		settings->reset_a2r_usec = *(u64 *)o->buffer.pointer;
 	else
-		dev_warn(&(applespi)->spi->dev,
+		dev_warn(&applespi->spi->dev,
 			 "Property resetA2RUsec not found\n");
 
 	if (!acpi_dev_get_property(adev, "resetRecUsec", ACPI_TYPE_BUFFER, &o))
 		settings->reset_rec_usec = *(u64 *)o->buffer.pointer;
 	else
-		dev_warn(&(applespi)->spi->dev,
+		dev_warn(&applespi->spi->dev,
 			 "Property resetRecUsec not found\n");
 
-	dev_dbg(&(applespi)->spi->dev,
+	dev_dbg(&applespi->spi->dev,
 		"SPI settings: spi_cs_delay=%llu reset_a2r_usec=%llu reset_rec_usec=%llu\n",
 		settings->spi_cs_delay, settings->reset_a2r_usec,
 		settings->reset_rec_usec);
@@ -816,7 +815,7 @@ static int applespi_enable_spi(struct applespi_data *applespi)
 	/* SIEN(1) will enable SPI communication */
 	acpi_sts = acpi_execute_simple_method(applespi->sien, NULL, 1);
 	if (ACPI_FAILURE(acpi_sts)) {
-		dev_err(&(applespi)->spi->dev, "SIEN failed: %s\n",
+		dev_err(&applespi->spi->dev, "SIEN failed: %s\n",
 			acpi_format_exception(acpi_sts));
 		return -ENODEV;
 	}
@@ -985,7 +984,7 @@ static int applespi_send_cmd_msg(struct applespi_data *applespi)
 	sts = applespi_async(applespi, &applespi->wr_m,
 			     applespi_async_write_complete);
 	if (sts) {
-		dev_warn(&(applespi)->spi->dev,
+		dev_warn(&applespi->spi->dev,
 			 "Error queueing async write to device: %d\n", sts);
 		return sts;
 	}
@@ -1367,7 +1366,7 @@ applespi_register_touchpad_device(struct applespi_data *applespi,
 	/* set up touchpad dimensions */
 	tp_info = applespi_find_touchpad_info(rcvd_tp_info->model_no);
 	if (!tp_info) {
-		dev_warn(&(applespi)->spi->dev,
+		dev_warn(&applespi->spi->dev,
 			 "Unknown touchpad model %x - falling back to MB8 touchpad\n",
 			 rcvd_tp_info->model_no);
 		tp_info = &applespi_tp_models[0].tp_info;
@@ -1380,14 +1379,14 @@ applespi_register_touchpad_device(struct applespi_data *applespi,
 
 		sts = sscanf(touchpad_dimensions, "%dx%d+%u+%u", &x, &y, &w, &h);
 		if (sts == 4) {
-			dev_info(&(applespi)->spi->dev,
+			dev_info(&applespi->spi->dev,
 				 "Overriding touchpad dimensions from module param\n");
 			applespi->tp_info.x_min = x;
 			applespi->tp_info.y_min = y;
 			applespi->tp_info.x_max = x + w;
 			applespi->tp_info.y_max = y + h;
 		} else {
-			dev_warn(&(applespi)->spi->dev,
+			dev_warn(&applespi->spi->dev,
 				 "Invalid touchpad dimensions '%s': must be in the form XxY+W+H\n",
 				 touchpad_dimensions);
 			touchpad_dimensions[0] = '\0';
@@ -1403,16 +1402,16 @@ applespi_register_touchpad_device(struct applespi_data *applespi,
 	}
 
 	/* create touchpad input device */
-	touchpad_input_dev = devm_input_allocate_device(&(applespi)->spi->dev);
+	touchpad_input_dev = devm_input_allocate_device(&applespi->spi->dev);
 	if (!touchpad_input_dev) {
-		dev_err(&(applespi)->spi->dev,
+		dev_err(&applespi->spi->dev,
 			"Failed to allocate touchpad input device\n");
 		return -ENOMEM;
 	}
 
 	touchpad_input_dev->name = "Apple SPI Touchpad";
 	touchpad_input_dev->phys = "applespi/input1";
-	touchpad_input_dev->dev.parent = &(applespi)->spi->dev;
+	touchpad_input_dev->dev.parent = &applespi->spi->dev;
 	touchpad_input_dev->id.bustype = BUS_SPI;
 	touchpad_input_dev->id.vendor = SYNAPTICS_VENDOR_ID;
 	touchpad_input_dev->id.product =
@@ -1461,7 +1460,7 @@ applespi_register_touchpad_device(struct applespi_data *applespi,
 	/* register input device */
 	sts = input_register_device(touchpad_input_dev);
 	if (sts) {
-		dev_err(&(applespi)->spi->dev,
+		dev_err(&applespi->spi->dev,
 			"Unable to register touchpad input device (%d)\n", sts);
 		return sts;
 	}
@@ -1496,7 +1495,7 @@ static void applespi_handle_cmd_response(struct applespi_data *applespi,
 	}
 
 	if (le16_to_cpu(message->length) != 0x0000) {
-		dev_warn_ratelimited(&(applespi)->spi->dev,
+		dev_warn_ratelimited(&applespi->spi->dev,
 				     "Received unexpected write response: length=%x\n",
 				     le16_to_cpu(message->length));
 		return;
@@ -1505,7 +1504,7 @@ static void applespi_handle_cmd_response(struct applespi_data *applespi,
 	if (packet->device == PACKET_DEV_TPAD &&
 	    le16_to_cpu(message->type) == 0x0252 &&
 	    le16_to_cpu(message->rsp_buf_len) == 0x0002)
-		dev_info(&(applespi)->spi->dev, "modeswitch done.\n");
+		dev_info(&applespi->spi->dev, "modeswitch done.\n");
 }
 
 static bool applespi_verify_crc(struct applespi_data *applespi, u8 *buffer,
@@ -1515,7 +1514,7 @@ static bool applespi_verify_crc(struct applespi_data *applespi, u8 *buffer,
 
 	crc = crc16(0, buffer, buflen);
 	if (crc) {
-		dev_warn_ratelimited(&(applespi)->spi->dev,
+		dev_warn_ratelimited(&applespi->spi->dev,
 				     "Received corrupted packet (crc mismatch)\n");
 		trace_applespi_bad_crc(ET_RD_CRC, READ, buffer, buflen);
 
@@ -1582,7 +1581,7 @@ static void applespi_got_data(struct applespi_data *applespi)
 	len = le16_to_cpu(packet->length);
 
 	if (len > sizeof(packet->data)) {
-		dev_warn_ratelimited(&(applespi)->spi->dev,
+		dev_warn_ratelimited(&applespi->spi->dev,
 				     "Received corrupted packet (invalid packet length %u)\n",
 				     len);
 		goto msg_complete;
@@ -1591,21 +1590,21 @@ static void applespi_got_data(struct applespi_data *applespi)
 	/* handle multi-packet messages */
 	if (rem > 0 || off > 0) {
 		if (off != applespi->saved_msg_len) {
-			dev_warn_ratelimited(&(applespi)->spi->dev,
+			dev_warn_ratelimited(&applespi->spi->dev,
 					     "Received unexpected offset (got %u, expected %u)\n",
 					     off, applespi->saved_msg_len);
 			goto msg_complete;
 		}
 
 		if (off + rem > MAX_PKTS_PER_MSG * APPLESPI_PACKET_SIZE) {
-			dev_warn_ratelimited(&(applespi)->spi->dev,
+			dev_warn_ratelimited(&applespi->spi->dev,
 					     "Received message too large (size %u)\n",
 					     off + rem);
 			goto msg_complete;
 		}
 
 		if (off + len > MAX_PKTS_PER_MSG * APPLESPI_PACKET_SIZE) {
-			dev_warn_ratelimited(&(applespi)->spi->dev,
+			dev_warn_ratelimited(&applespi->spi->dev,
 					     "Received message too large (size %u)\n",
 					     off + len);
 			goto msg_complete;
@@ -1629,7 +1628,7 @@ static void applespi_got_data(struct applespi_data *applespi)
 		goto msg_complete;
 
 	if (le16_to_cpu(message->length) != msg_len - MSG_HEADER_SIZE - 2) {
-		dev_warn_ratelimited(&(applespi)->spi->dev,
+		dev_warn_ratelimited(&applespi->spi->dev,
 				     "Received corrupted packet (invalid message length %u - expected %u)\n",
 				     le16_to_cpu(message->length),
 				     msg_len - MSG_HEADER_SIZE - 2);
@@ -1651,7 +1650,7 @@ static void applespi_got_data(struct applespi_data *applespi)
 			 tp->number_of_fingers * sizeof(tp->fingers[0]);
 
 		if (le16_to_cpu(message->length) + 2 != tp_len) {
-			dev_warn_ratelimited(&(applespi)->spi->dev,
+			dev_warn_ratelimited(&applespi->spi->dev,
 					     "Received corrupted packet (invalid message length %u - num-fingers %u, tp-len %zu)\n",
 					     le16_to_cpu(message->length),
 					     tp->number_of_fingers, tp_len);
@@ -1659,7 +1658,7 @@ static void applespi_got_data(struct applespi_data *applespi)
 		}
 
 		if (tp->number_of_fingers > MAX_FINGERS) {
-			dev_warn_ratelimited(&(applespi)->spi->dev,
+			dev_warn_ratelimited(&applespi->spi->dev,
 					     "Number of reported fingers (%u) exceeds max (%u))\n",
 					     tp->number_of_fingers,
 					     MAX_FINGERS);
@@ -1684,8 +1683,7 @@ static void applespi_async_read_complete(void *context)
 	struct applespi_data *applespi = context;
 
 	if (applespi->rd_m.status < 0) {
-		dev_warn(&(applespi)->spi->dev,
-			 "Error reading from device: %d\n",
+		dev_warn(&applespi->spi->dev, "Error reading from device: %d\n",
 			 applespi->rd_m.status);
 		/*
 		 * We don't actually know if this was a pure read, or a response
@@ -1714,7 +1712,7 @@ static u32 applespi_notify(acpi_handle gpe_device, u32 gpe, void *context)
 		sts = applespi_async(applespi, &applespi->rd_m,
 				     applespi_async_read_complete);
 		if (sts)
-			dev_warn(&(applespi)->spi->dev,
+			dev_warn(&applespi->spi->dev,
 				 "Error queueing async read to device: %d\n",
 				 sts);
 		else
@@ -1744,7 +1742,7 @@ static int applespi_get_saved_bl_level(struct applespi_data *applespi)
 
 	sts = efivar_entry_get(efivar_entry, NULL, &efi_data_len, &efi_data);
 	if (sts && sts != -ENOENT)
-		dev_warn(&(applespi)->spi->dev,
+		dev_warn(&applespi->spi->dev,
 			 "Error getting backlight level from EFI vars: %d\n",
 			 sts);
 
@@ -1772,7 +1770,7 @@ static void applespi_save_bl_level(struct applespi_data *applespi,
 	sts = efivar_entry_set_safe(EFI_BL_LEVEL_NAME, efi_guid, efi_attr, true,
 				    efi_data_len, &efi_data);
 	if (sts)
-		dev_warn(&(applespi)->spi->dev,
+		dev_warn(&applespi->spi->dev,
 			 "Error saving backlight level to EFI vars: %d\n", sts);
 }
 
@@ -1829,7 +1827,7 @@ static int applespi_probe(struct spi_device *spi)
 					 &applespi->sien)) ||
 	    ACPI_FAILURE(acpi_get_handle(applespi->handle, "SIST",
 					 &applespi->sist))) {
-		dev_err(&(applespi)->spi->dev,
+		dev_err(&applespi->spi->dev,
 			"Failed to get required ACPI method handles\n");
 		return -ENODEV;
 	}
@@ -1880,7 +1878,7 @@ static int applespi_probe(struct spi_device *spi)
 
 	sts = input_register_device(applespi->keyboard_input_dev);
 	if (sts) {
-		dev_err(&(applespi)->spi->dev,
+		dev_err(&applespi->spi->dev,
 			"Unable to register keyboard input device (%d)\n", sts);
 		return -ENODEV;
 	}
@@ -1891,7 +1889,7 @@ static int applespi_probe(struct spi_device *spi)
 	 */
 	acpi_sts = acpi_evaluate_integer(applespi->handle, "_GPE", NULL, &gpe);
 	if (ACPI_FAILURE(acpi_sts)) {
-		dev_err(&(applespi)->spi->dev,
+		dev_err(&applespi->spi->dev,
 			"Failed to obtain GPE for SPI slave device: %s\n",
 			acpi_format_exception(acpi_sts));
 		return -ENODEV;
@@ -1902,7 +1900,7 @@ static int applespi_probe(struct spi_device *spi)
 					    ACPI_GPE_LEVEL_TRIGGERED,
 					    applespi_notify, applespi);
 	if (ACPI_FAILURE(acpi_sts)) {
-		dev_err(&(applespi)->spi->dev,
+		dev_err(&applespi->spi->dev,
 			"Failed to install GPE handler for GPE %d: %s\n",
 			applespi->gpe, acpi_format_exception(acpi_sts));
 		return -ENODEV;
@@ -1912,7 +1910,7 @@ static int applespi_probe(struct spi_device *spi)
 
 	acpi_sts = acpi_enable_gpe(NULL, applespi->gpe);
 	if (ACPI_FAILURE(acpi_sts)) {
-		dev_err(&(applespi)->spi->dev,
+		dev_err(&applespi->spi->dev,
 			"Failed to enable GPE handler for GPE %d: %s\n",
 			applespi->gpe, acpi_format_exception(acpi_sts));
 		acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
@@ -1940,7 +1938,7 @@ static int applespi_probe(struct spi_device *spi)
 
 	sts = devm_led_classdev_register(&spi->dev, &applespi->backlight_info);
 	if (sts)
-		dev_warn(&(applespi)->spi->dev,
+		dev_warn(&applespi->spi->dev,
 			 "Unable to register keyboard backlight class dev (%d)\n",
 			 sts);
 
@@ -1948,7 +1946,7 @@ static int applespi_probe(struct spi_device *spi)
 	applespi->debugfs_root = debugfs_create_dir("applespi", NULL);
 	if (IS_ERR(applespi->debugfs_root)) {
 		if (PTR_ERR(applespi->debugfs_root) != -ENODEV)
-			dev_warn(&(applespi)->spi->dev,
+			dev_warn(&applespi->spi->dev,
 				 "Error creating debugfs root entry (%ld)\n",
 				 PTR_ERR(applespi->debugfs_root));
 	} else {
@@ -1958,7 +1956,7 @@ static int applespi_probe(struct spi_device *spi)
 					  applespi->debugfs_root,
 					  &applespi->debug_tp_dim);
 		if (IS_ERR(ret))
-			dev_warn(&(applespi)->spi->dev,
+			dev_warn(&applespi->spi->dev,
 				 "Error creating debugfs entry enable_tp_dim (%ld)\n",
 				 PTR_ERR(ret));
 
@@ -1966,7 +1964,7 @@ static int applespi_probe(struct spi_device *spi)
 					  applespi->debugfs_root, applespi,
 					  &applespi_tp_dim_fops);
 		if (IS_ERR(ret))
-			dev_warn(&(applespi)->spi->dev,
+			dev_warn(&applespi->spi->dev,
 				 "Error creating debugfs entry tp_dim (%ld)\n",
 				 PTR_ERR(ret));
 	}
@@ -2046,7 +2044,7 @@ static int applespi_suspend(struct device *dev)
 	/* turn off caps-lock - it'll stay on otherwise */
 	sts = applespi_set_capsl_led(applespi, false);
 	if (sts)
-		dev_warn(&(applespi)->spi->dev,
+		dev_warn(&applespi->spi->dev,
 			 "Failed to turn off caps-lock led (%d)\n", sts);
 
 	applespi_drain_writes(applespi);
@@ -2054,7 +2052,7 @@ static int applespi_suspend(struct device *dev)
 	/* disable the interrupt */
 	acpi_sts = acpi_disable_gpe(NULL, applespi->gpe);
 	if (ACPI_FAILURE(acpi_sts))
-		dev_err(&(applespi)->spi->dev,
+		dev_err(&applespi->spi->dev,
 			"Failed to disable GPE handler for GPE %d: %s\n",
 			applespi->gpe, acpi_format_exception(acpi_sts));
 
@@ -2090,7 +2088,7 @@ static int applespi_resume(struct device *dev)
 	/* re-enable the interrupt */
 	acpi_sts = acpi_enable_gpe(NULL, applespi->gpe);
 	if (ACPI_FAILURE(acpi_sts))
-		dev_err(&(applespi)->spi->dev,
+		dev_err(&applespi->spi->dev,
 			"Failed to re-enable GPE handler for GPE %d: %s\n",
 			applespi->gpe, acpi_format_exception(acpi_sts));
 
