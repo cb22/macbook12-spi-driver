@@ -1944,17 +1944,17 @@ static int applespi_probe(struct spi_device *spi)
 					  applespi->debugfs_root,
 					  &applespi->debug_tp_dim);
 		if (IS_ERR(ret))
-			dev_warn(&applespi->spi->dev,
-				 "Error creating debugfs entry enable_tp_dim (%ld)\n",
-				 PTR_ERR(ret));
+			dev_dbg(&applespi->spi->dev,
+				"Error creating debugfs entry enable_tp_dim (%ld)\n",
+				PTR_ERR(ret));
 
 		ret = debugfs_create_file("tp_dim", 0400,
 					  applespi->debugfs_root, applespi,
 					  &applespi_tp_dim_fops);
 		if (IS_ERR(ret))
-			dev_warn(&applespi->spi->dev,
-				 "Error creating debugfs entry tp_dim (%ld)\n",
-				 PTR_ERR(ret));
+			dev_dbg(&applespi->spi->dev,
+				"Error creating debugfs entry tp_dim (%ld)\n",
+				PTR_ERR(ret));
 	}
 
 	return 0;
