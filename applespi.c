@@ -1807,12 +1807,19 @@ static int applespi_probe(struct spi_device *spi)
 	applespi_setup_write_txfrs(applespi);
 
 	/* cache ACPI method handles */
-	if (ACPI_FAILURE(acpi_get_handle(spi_handle, "SIEN",
-					 &applespi->sien)) ||
-	    ACPI_FAILURE(acpi_get_handle(spi_handle, "SIST",
-					 &applespi->sist))) {
+	acpi_sts = acpi_get_handle(spi_handle, "SIEN", &applespi->sien);
+	if (ACPI_FAILURE(acpi_sts)) {
 		dev_err(&applespi->spi->dev,
-			"Failed to get required ACPI method handles\n");
+			"Failed to get SIEN ACPI method handle: %s\n",
+			acpi_format_exception(acpi_sts));
+		return -ENODEV;
+	}
+
+	acpi_sts = acpi_get_handle(spi_handle, "SIST", &applespi->sist);
+	if (ACPI_FAILURE(acpi_sts)) {
+		dev_err(&applespi->spi->dev,
+			"Failed to get SIST ACPI method handle: %s\n",
+			acpi_format_exception(acpi_sts));
 		return -ENODEV;
 	}
 
