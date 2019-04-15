@@ -1237,18 +1237,18 @@ static void
 applespi_remap_fn_key(struct keyboard_protocol *keyboard_protocol)
 {
 	unsigned char tmp;
+	u8 bit = BIT(fnremap - 1);
 
 	if (!fnremap || fnremap > ARRAY_SIZE(applespi_controlcodes) ||
 	    !applespi_controlcodes[fnremap - 1])
 		return;
 
 	tmp = keyboard_protocol->fn_pressed;
-	keyboard_protocol->fn_pressed =
-			!!(keyboard_protocol->modifiers & BIT(fnremap - 1));
+	keyboard_protocol->fn_pressed = !!(keyboard_protocol->modifiers & bit);
 	if (tmp)
-		keyboard_protocol->modifiers |= BIT(fnremap - 1);
+		keyboard_protocol->modifiers |= bit;
 	else
-		keyboard_protocol->modifiers &= ~BIT(fnremap - 1);
+		keyboard_protocol->modifiers &= ~bit;
 }
 
 static void
