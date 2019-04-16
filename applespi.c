@@ -1237,7 +1237,7 @@ static void
 applespi_remap_fn_key(struct keyboard_protocol *keyboard_protocol)
 {
 	unsigned char tmp;
-	u8 bit = BIT(fnremap - 1);
+	u8 bit = BIT((fnremap - 1) & 0x07);
 
 	if (!fnremap || fnremap > ARRAY_SIZE(applespi_controlcodes) ||
 	    !applespi_controlcodes[fnremap - 1])
