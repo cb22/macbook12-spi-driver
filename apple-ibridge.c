@@ -101,17 +101,21 @@ static const struct mfd_cell appleib_subdevs[] = {
 
 static struct appleib_device *appleib_dev;
 
-#define	call_driver_func(drv_info, fn, hdev, ...) \
-	do { \
-		if ((drv_info)->driver->fn) \
-			(drv_info)->driver->fn(hdev, ##__VA_ARGS__); \
+#define	call_void_driver_func(drv_info, fn, ...)			\
+	do {								\
+		if ((drv_info)->driver->fn)				\
+			(drv_info)->driver->fn(__VA_ARGS__);		\
 	} while (0)
 
-#define	call_driver_func_ret(drv_info, fn, rc, hdev, ...) \
-	do { \
-		if ((drv_info)->driver->fn) \
-			rc = (drv_info)->driver->fn(hdev, ##__VA_ARGS__); \
-	} while (0)
+#define	call_driver_func(drv_info, fn, ret_type, ...)			\
+	({								\
+		ret_type rc = 0;					\
+									\
+		if ((drv_info)->driver->fn)				\
+			rc = (drv_info)->driver->fn(__VA_ARGS__);	\
+									\
+		rc;							\
+	})
 
 static void appleib_remove_driver(struct appleib_device *ib_dev,
 				  struct appleib_hid_drv_info *drv_info,
@@ -120,7 +124,8 @@ static void appleib_remove_driver(struct appleib_device *ib_dev,
 	list_del_rcu(&drv_info->entry);
 	synchronize_srcu(&ib_dev->lists_srcu);
 
-	call_driver_func(drv_info, remove, dev_info->device);
+	call_void_driver_func(drv_info, remove, dev_info->device);
+
 	kfree(drv_info);
 }
 
@@ -130,14 +135,14 @@ static int appleib_probe_driver(struct appleib_hid_drv_info *drv_info,
 	struct appleib_hid_drv_info *d;
 	int rc = 0;
 
-	call_driver_func_ret(drv_info, probe, rc, dev_info->device,
-			     dev_info->device_id);
+	rc = call_driver_func(drv_info, probe, int, dev_info->device,
+			      dev_info->device_id);
 	if (rc)
 		return rc;
 
 	d = kmemdup(drv_info, sizeof(*drv_info), GFP_KERNEL);
 	if (!d) {
-		call_driver_func(drv_info, remove, dev_info->device);
+		call_void_driver_func(drv_info, remove, dev_info->device);
 		return -ENOMEM;
 	}
 
@@ -369,11 +374,9 @@ static int appleib_hid_event_fwd(struct appleib_hid_drv_info *drv_info,
 				 struct hid_device *hdev, void *args)
 {
 	struct appleib_hid_event_args *evt_args = args;
-	int rc = 0;
 
-	call_driver_func_ret(drv_info, event, rc, hdev, evt_args->field,
-			     evt_args->usage, evt_args->value);
-	return rc;
+	return call_driver_func(drv_info, event, int, hdev, evt_args->field,
+				evt_args->usage, evt_args->value);
 }
 
 static int appleib_hid_event(struct hid_device *hdev, struct hid_field *field,
@@ -432,11 +435,8 @@ static __u8* appleib_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 static int appleib_input_configured_fwd(struct appleib_hid_drv_info *drv_info,
 					struct hid_device *hdev, void *args)
 {
-	int rc = 0;
-
-	call_driver_func_ret(drv_info, input_configured, rc, hdev,
-			     (struct hid_input *)args);
-	return rc;
+	return call_driver_func(drv_info, input_configured, int, hdev,
+				(struct hid_input *)args);
 }
 
 static int appleib_input_configured(struct hid_device *hdev,
@@ -450,11 +450,8 @@ static int appleib_input_configured(struct hid_device *hdev,
 static int appleib_hid_suspend_fwd(struct appleib_hid_drv_info *drv_info,
 				   struct hid_device *hdev, void *args)
 {
-	int rc = 0;
-
-	call_driver_func_ret(drv_info, suspend, rc, hdev,
-			     *(pm_message_t *)args);
-	return rc;
+	return call_driver_func(drv_info, suspend, int, hdev,
+				*(pm_message_t *)args);
 }
 
 static int appleib_hid_suspend(struct hid_device *hdev, pm_message_t message)
@@ -465,10 +462,7 @@ static int appleib_hid_suspend(struct hid_device *hdev, pm_message_t message)
 static int appleib_hid_resume_fwd(struct appleib_hid_drv_info *drv_info,
 				  struct hid_device *hdev, void *args)
 {
-	int rc = 0;
-
-	call_driver_func_ret(drv_info, resume, rc, hdev);
-	return rc;
+	return call_driver_func(drv_info, resume, int, hdev);
 }
 
 static int appleib_hid_resume(struct hid_device *hdev)
@@ -479,10 +473,7 @@ static int appleib_hid_resume(struct hid_device *hdev)
 static int appleib_hid_reset_resume_fwd(struct appleib_hid_drv_info *drv_info,
 					struct hid_device *hdev, void *args)
 {
-	int rc = 0;
-
-	call_driver_func_ret(drv_info, reset_resume, rc, hdev);
-	return rc;
+	return call_driver_func(drv_info, reset_resume, int, hdev);
 }
 
 static int appleib_hid_reset_resume(struct hid_device *hdev)
