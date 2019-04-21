@@ -1288,4 +1288,4 @@ module_platform_driver(appletb_platform_driver);
 
 MODULE_AUTHOR("Ronald Tschalär");
 MODULE_DESCRIPTION("MacBookPro Touch Bar driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

@@ -899,4 +899,4 @@ module_acpi_driver(appleib_driver)
 
 MODULE_AUTHOR("Ronald Tschalär");
 MODULE_DESCRIPTION("Apple iBridge driver");
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");

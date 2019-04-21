@@ -691,5 +691,5 @@ static struct platform_driver appleals_platform_driver = {
 module_platform_driver(appleals_platform_driver);
 
 MODULE_AUTHOR("Ronald Tschalär");
-MODULE_DESCRIPTION("MacBookPro iBridge ALS driver");
-MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("Apple iBridge ALS driver");
+MODULE_LICENSE("GPL v2");
