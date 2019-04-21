@@ -7,23 +7,25 @@
 
 /**
  * MacBookPro models with a Touch Bar (13,[23] and 14,[23]) have an Apple
- * iBridge chip which exposes the touch bar, built-in webcam (iSight), and
- * ambient light sensor. It shows up in the system as a USB device with 3
- * configurations: 'Default iBridge Interfaces', 'Default iBridge
+ * iBridge chip (also known as T1 chip) which exposes the touch bar,
+ * built-in webcam (iSight), ambient light sensor, and Secure Enclave
+ * Processor (SEP) for TouchID. It shows up in the system as a USB device
+ * with 3 configurations: 'Default iBridge Interfaces', 'Default iBridge
  * Interfaces(OS X)', and 'Default iBridge Interfaces(Recovery)'. While
  * the second one is used by MacOS to provide the fancy touch bar
  * functionality with custom buttons etc, this driver just uses the first.
  *
  * In the first (default after boot) configuration, 4 usb interfaces are
  * exposed: 2 related to the webcam, and 2 USB HID interfaces representing
- * the touch bar and the ambient light sensor. The webcam interfaces are
- * already handled by the uvcvideo driver; furthermore, the handling of
- * the input reports when "keys" on the touch bar are pressed is already
- * handled properly by the generic USB HID core. This leaves the
- * management of the touch bar modes (e.g. switching between function and
- * special keys when the FN key is pressed), the touch bar display (dimming
- * and turning off), the key-remapping when the FN key is pressed, and
- * handling of the light sensor.
+ * the touch bar and the ambient light sensor (and possibly the SEP,
+ * though at this point in time nothing is known about that). The webcam
+ * interfaces are already handled by the uvcvideo driver; furthermore, the
+ * handling of the input reports when "keys" on the touch bar are pressed
+ * is already handled properly by the generic USB HID core. This leaves
+ * the management of the touch bar modes (e.g. switching between function
+ * and special keys when the FN key is pressed), the touch bar display
+ * (dimming and turning off), the key-remapping when the FN key is
+ * pressed, and handling of the light sensor.
  *
  * This driver is implemented as an MFD driver, with the touch bar and ALS
  * functions implemented by appropriate subdrivers (mfd cells). Because
@@ -179,7 +181,7 @@ static void appleib_detach_drivers(struct appleib_device *ib_dev,
 	appleib_remove_driver_attachments(ib_dev, dev_info, NULL);
 }
 
-/*
+/**
  * Unregister a previously registered HID driver from us.
  * @ib_dev: the appleib_device from which to unregister the driver
  * @driver: the driver to unregister
@@ -241,7 +243,7 @@ static void appleib_stop_hid_events(struct appleib_hid_dev_info *dev_info)
 	}
 }
 
-/*
+/**
  * Register a HID driver with us.
  * @ib_dev: the appleib_device with which to register the driver
  * @driver: the driver to register
@@ -287,7 +289,7 @@ int appleib_register_hid_driver(struct appleib_device *ib_dev,
 }
 EXPORT_SYMBOL_GPL(appleib_register_hid_driver);
 
-/*
+/**
  * Get the driver-specific data associated with the given, previously
  * registered HID driver (provided in the appleib_register_hid_driver()
  * call).
@@ -486,7 +488,7 @@ static int appleib_hid_reset_resume(struct hid_device *hdev)
 }
 #endif /* CONFIG_PM */
 
-/*
+/**
  * Find the field in the report with the given usage.
  * @report: the report to search
  * @field_usage: the usage of the field to search for
@@ -512,7 +514,7 @@ struct hid_field *appleib_find_report_field(struct hid_report *report,
 }
 EXPORT_SYMBOL_GPL(appleib_find_report_field);
 
-/*
+/**
  * Search all the reports of the device for the field with the given usage.
  * @hdev: the device whose reports to search
  * @application: the usage of application collection that the field must
@@ -548,8 +550,8 @@ struct hid_field *appleib_find_hid_field(struct hid_device *hdev,
 }
 EXPORT_SYMBOL_GPL(appleib_find_hid_field);
 
-/*
- * Return whether we're current inside a hid_device_probe or not.
+/**
+ * Return whether we're currently inside a hid_device_probe or not.
  * @ib_dev: the appleib_device
  */
 bool appleib_in_hid_probe(struct appleib_device *ib_dev)

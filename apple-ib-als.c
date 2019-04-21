@@ -5,7 +5,7 @@
  * Copyright (c) 2017-2018 Ronald Tschalär
  */
 
-/**
+/*
  * MacBookPro models with an iBridge chip (13,[23] and 14,[23]) have an
  * ambient light sensor that is exposed via one of the USB interfaces on
  * the iBridge as a standard HID light sensor. However, we cannot use the

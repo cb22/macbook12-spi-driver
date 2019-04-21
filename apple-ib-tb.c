@@ -5,8 +5,8 @@
  * Copyright (c) 2017-2018 Ronald Tschalär
  */
 
-/**
- * Recent MacBookPro models (13,[23] and 14,[23]) have a Touch Bar, which
+/*
+ * Recent MacBookPro models (13,[23] and 14,[23]) have a touch bar, which
  * is exposed via several USB interfaces. MacOS supports a fancy mode
  * where arbitrary buttons can be defined; this driver currently only
  * supports the simple mode that consists of 3 predefined layouts
