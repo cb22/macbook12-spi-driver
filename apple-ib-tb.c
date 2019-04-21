@@ -870,16 +870,14 @@ static int appletb_input_configured(struct hid_device *hdev,
 {
 	int idx;
 	struct input_dev *input = hidinput->input;
-	#define CLEAR_ARRAY(array) \
-		memset(array, 0, sizeof(array))
 
 	/*
 	 * Clear various input capabilities that are blindly set by the hid
 	 * driver (usbkbd.c)
 	 */
-	CLEAR_ARRAY(input->evbit);
-	CLEAR_ARRAY(input->keybit);
-	CLEAR_ARRAY(input->ledbit);
+	memset(input->evbit, 0, sizeof(input->evbit));
+	memset(input->keybit, 0, sizeof(input->keybit));
+	memset(input->ledbit, 0, sizeof(input->ledbit));
 
 	/* set our actual capabilities */
 	__set_bit(EV_KEY, input->evbit);
