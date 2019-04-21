@@ -81,7 +81,7 @@ MODULE_PARM_DESC(dim_timeout, "Default touch bar dim timeout (in seconds); 0 mea
 
 static int appletb_tb_def_fn_mode = APPLETB_FN_MODE_NORM;
 module_param_named(fnmode, appletb_tb_def_fn_mode, int, 0444);
-MODULE_PARM_DESC(fnmode, "Default FN key mode: 0 = f-keys only, [1] = fn key switches from special to f-keys, 2 = inverse of 1, 3 = special keys only");
+MODULE_PARM_DESC(fnmode, "Default Fn key mode: 0 = f-keys only, [1] = fn key switches from special to f-keys, 2 = inverse of 1, 3 = special keys only");
 
 static ssize_t idle_timeout_show(struct device *dev,
 				 struct device_attribute *attr, char *buf);
@@ -888,6 +888,7 @@ static int appletb_input_configured(struct hid_device *hdev,
 		input_set_capability(input, EV_KEY, appletb_fn_codes[idx].from);
 		input_set_capability(input, EV_KEY, appletb_fn_codes[idx].to);
 	}
+
 	input_set_capability(input, EV_KEY, KEY_ESC);
 	input_set_capability(input, EV_KEY, KEY_UNKNOWN);
 
@@ -940,9 +941,8 @@ static int appletb_fill_report_info(struct appletb_device *tb_dev,
 	return 1;
 }
 
-static struct appletb_report_info *appletb_get_report_info(
-						struct appletb_device *tb_dev,
-						struct hid_device *hdev)
+static struct appletb_report_info *
+appletb_get_report_info(struct appletb_device *tb_dev, struct hid_device *hdev)
 {
 	if (hdev == tb_dev->mode_info.hdev)
 		return &tb_dev->mode_info;

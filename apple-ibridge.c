@@ -391,7 +391,7 @@ static int appleib_hid_event(struct hid_device *hdev, struct hid_field *field,
 	return appleib_forward_int_op(hdev, appleib_hid_event_fwd, &args);
 }
 
-static __u8* appleib_report_fixup(struct hid_device *hdev, __u8 *rdesc,
+static __u8 *appleib_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 				  unsigned int *rsize)
 {
 	/* Some fields have a size of 64 bits, which according to HID 1.11
@@ -554,10 +554,9 @@ bool appleib_in_hid_probe(struct appleib_device *ib_dev)
 }
 EXPORT_SYMBOL_GPL(appleib_in_hid_probe);
 
-static struct appleib_hid_dev_info *appleib_add_device(
-						struct appleib_device *ib_dev,
-						struct hid_device *hdev,
-						const struct hid_device_id *id)
+static struct appleib_hid_dev_info *
+appleib_add_device(struct appleib_device *ib_dev, struct hid_device *hdev,
+		   const struct hid_device_id *id)
 {
 	struct appleib_hid_dev_info *dev_info;
 	struct appleib_hid_drv_info *drv_info;
