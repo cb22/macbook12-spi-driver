@@ -296,6 +296,11 @@ static bool appletb_any_tb_key_pressed(struct appletb_device *tb_dev)
 	return false;
 }
 
+static void appletb_schedule_tb_update(struct appletb_device *tb_dev, s64 secs)
+{
+	schedule_delayed_work(&tb_dev->tb_work, msecs_to_jiffies(secs * 1000));
+}
+
 static void appletb_set_tb_worker(struct work_struct *work)
 {
 	struct appletb_device *tb_dev =
@@ -384,7 +389,7 @@ static void appletb_set_tb_worker(struct work_struct *work)
 
 	/* a new command arrived while we were busy - handle it */
 	if (need_reschedule) {
-		schedule_delayed_work(&tb_dev->tb_work, 0);
+		appletb_schedule_tb_update(tb_dev, 0);
 		return;
 	}
 
@@ -395,12 +400,10 @@ static void appletb_set_tb_worker(struct work_struct *work)
 	/* manage idle/dim timeout */
 	if (time_left > 0) {
 		/* we fired too soon or had a mode-change - re-schedule */
-		schedule_delayed_work(&tb_dev->tb_work,
-				      msecs_to_jiffies(time_left * 1000));
+		appletb_schedule_tb_update(tb_dev, time_left);
 	} else if (any_tb_key_pressed) {
 		/* keys are still pressed - re-schedule */
-		schedule_delayed_work(&tb_dev->tb_work,
-				      msecs_to_jiffies(min_timeout * 1000));
+		appletb_schedule_tb_update(tb_dev, min_timeout);
 	} else {
 		/* dim or idle timeout reached */
 		int next_disp = (time_to_off == 0) ? APPLETB_CMD_DISP_OFF :
@@ -413,8 +416,7 @@ static void appletb_set_tb_worker(struct work_struct *work)
 		}
 
 		if (time_to_off > 0)
-			schedule_delayed_work(&tb_dev->tb_work,
-					msecs_to_jiffies(time_to_off * 1000));
+			appletb_schedule_tb_update(tb_dev, time_to_off);
 	}
 }
 
@@ -521,7 +523,7 @@ static void appletb_update_touchbar_no_lock(struct appletb_device *tb_dev,
 			    want_disp, tb_dev->cur_tb_disp);
 	if (need_update) {
 		cancel_delayed_work(&tb_dev->tb_work);
-		schedule_delayed_work(&tb_dev->tb_work, 0);
+		appletb_schedule_tb_update(tb_dev, 0);
 	}
 }
 
