@@ -24,7 +24,7 @@
  * use of these two reports.
  */
 
-#define pr_fmt(fmt) "apple-ib-tb: " fmt
+#define dev_fmt(fmt) "tb: " fmt
 
 #include <linux/device.h>
 #include <linux/hid.h>
@@ -116,6 +116,7 @@ static const struct attribute_group appletb_attr_group = {
 
 struct appletb_device {
 	bool			active;
+	struct device		*log_dev;
 
 	struct appletb_report_info {
 		struct hid_device	*hdev;
@@ -204,15 +205,16 @@ static int appletb_send_hid_report(struct appletb_report_info *rinfo,
 	return (rc > 0) ? 0 : rc;
 }
 
-static bool appletb_disable_autopm(struct usb_interface *iface)
+static bool appletb_disable_autopm(struct appletb_report_info *rinfo)
 {
 	int rc;
 
-	rc = usb_autopm_get_interface(iface);
+	rc = usb_autopm_get_interface(rinfo->usb_iface);
 	if (rc == 0)
 		return true;
 
-	pr_err("Failed to disable auto-pm on touch bar device (%d)\n", rc);
+	hid_err(rinfo->hdev,
+		"Failed to disable auto-pm on touch bar device (%d)\n", rc);
 	return false;
 }
 
@@ -225,14 +227,15 @@ static int appletb_set_tb_mode(struct appletb_device *tb_dev,
 	if (!tb_dev->mode_info.usb_iface)
 		return -ENOTCONN;
 
-	autopm_off = appletb_disable_autopm(tb_dev->mode_info.usb_iface);
+	autopm_off = appletb_disable_autopm(&tb_dev->mode_info);
 
 	rc = appletb_send_hid_report(&tb_dev->mode_info,
 				     USB_DIR_OUT | USB_TYPE_VENDOR |
 							USB_RECIP_DEVICE,
 				     &mode, 1);
 	if (rc < 0)
-		pr_err("Failed to set touch bar mode to %u (%d)\n", mode, rc);
+		dev_err(tb_dev->log_dev,
+			"Failed to set touch bar mode to %u (%d)\n", mode, rc);
 
 	if (autopm_off)
 		usb_autopm_put_interface(tb_dev->mode_info.usb_iface);
@@ -256,7 +259,7 @@ static int appletb_set_tb_disp(struct appletb_device *tb_dev,
 	if (disp != APPLETB_CMD_DISP_OFF &&
 	    tb_dev->cur_tb_disp == APPLETB_CMD_DISP_OFF)
 		tb_dev->tb_autopm_off =
-			appletb_disable_autopm(tb_dev->disp_info.usb_iface);
+			appletb_disable_autopm(&tb_dev->disp_info);
 
 	report[0] = tb_dev->disp_info.report_id;
 	report[2] = disp;
@@ -266,8 +269,9 @@ static int appletb_set_tb_disp(struct appletb_device *tb_dev,
 						USB_RECIP_INTERFACE,
 				     report, sizeof(report));
 	if (rc < 0)
-		pr_err("Failed to set touch bar display to %u (%d)\n", disp,
-		       rc);
+		dev_err(tb_dev->log_dev,
+			"Failed to set touch bar display to %u (%d)\n", disp,
+			rc);
 
 	if (disp == APPLETB_CMD_DISP_OFF &&
 	    tb_dev->cur_tb_disp != APPLETB_CMD_DISP_OFF) {
@@ -323,7 +327,7 @@ static void appletb_set_tb_worker(struct work_struct *work)
 		rc2 = appletb_set_tb_disp(tb_dev, pending_disp);
 
 	if (restore_autopm && tb_dev->tb_autopm_off)
-		appletb_disable_autopm(tb_dev->disp_info.usb_iface);
+		appletb_disable_autopm(&tb_dev->disp_info);
 
 	spin_lock_irqsave(&tb_dev->tb_lock, flags);
 
@@ -511,9 +515,10 @@ static void appletb_update_touchbar_no_lock(struct appletb_device *tb_dev,
 		need_update = true;
 
 	/* schedule the update if desired */
-	pr_debug_ratelimited("update: need_update=%d, want_mode=%d, cur-mode=%d, want_disp=%d, cur-disp=%d\n",
-			     need_update, want_mode, tb_dev->cur_tb_mode,
-			     want_disp, tb_dev->cur_tb_disp);
+	dev_dbg_ratelimited(tb_dev->log_dev,
+			    "update: need_update=%d, want_mode=%d, cur-mode=%d, want_disp=%d, cur-disp=%d\n",
+			    need_update, want_mode, tb_dev->cur_tb_mode,
+			    want_disp, tb_dev->cur_tb_disp);
 	if (need_update) {
 		cancel_delayed_work(&tb_dev->tb_work);
 		schedule_delayed_work(&tb_dev->tb_work, 0);
@@ -807,12 +812,14 @@ static int appletb_inp_connect(struct input_handler *handler,
 		handle = &tb_dev->tpd_handle;
 		handle->name = "tbtpad";
 	} else {
-		pr_err("Unknown device id (%lu)\n", id->driver_info);
+		dev_err(tb_dev->log_dev, "Unknown device id (%lu)\n",
+			id->driver_info);
 		return -ENOENT;
 	}
 
 	if (handle->dev) {
-		pr_err("Duplicate connect to %s input device\n", handle->name);
+		dev_err(tb_dev->log_dev,
+			"Duplicate connect to %s input device\n", handle->name);
 		return -EEXIST;
 	}
 
@@ -829,7 +836,7 @@ static int appletb_inp_connect(struct input_handler *handler,
 	if (rc)
 		goto err_unregister_handle;
 
-	pr_info("Connected to %s input device\n",
+	dev_dbg(tb_dev->log_dev, "Connected to %s input device\n",
 		handle == &tb_dev->kbd_handle ? "keyboard" : "touchpad");
 
 	return 0;
@@ -849,11 +856,11 @@ static void appletb_inp_disconnect(struct input_handle *handle)
 	input_close_device(handle);
 	input_unregister_handle(handle);
 
+	dev_dbg(tb_dev->log_dev, "Disconnected from %s input device\n",
+		handle == &tb_dev->kbd_handle ? "keyboard" : "touchpad");
+
 	input_put_device(handle->dev);
 	handle->dev = NULL;
-
-	pr_info("Disconnected from %s input device\n",
-		handle == &tb_dev->kbd_handle ? "keyboard" : "touchpad");
 }
 
 static int appletb_input_configured(struct hid_device *hdev,
@@ -909,8 +916,9 @@ static int appletb_fill_report_info(struct appletb_device *tb_dev,
 
 	usb_iface = appletb_get_usb_iface(hdev);
 	if (!usb_iface) {
-		hid_err(hdev,
-			"tb: Failed to find usb interface for hid device\n");
+		dev_err(tb_dev->log_dev,
+			"Failed to find usb interface for hid device %s\n",
+			dev_name(&hdev->dev));
 		return -ENODEV;
 	}
 
@@ -1013,8 +1021,9 @@ static int appletb_probe(struct hid_device *hdev,
 
 		rc = input_register_handler(&tb_dev->inp_handler);
 		if (rc) {
-			pr_err("Unabled to register keyboard handler (%d)\n",
-			       rc);
+			dev_err(tb_dev->log_dev,
+				"Unable to register keyboard handler (%d)\n",
+				rc);
 			goto mark_inactive;
 		}
 
@@ -1022,13 +1031,13 @@ static int appletb_probe(struct hid_device *hdev,
 		rc = sysfs_create_group(&tb_dev->mode_info.hdev->dev.kobj,
 					&appletb_attr_group);
 		if (rc) {
-			pr_err("Failed to create sysfs attributes (%d)\n", rc);
+			dev_err(tb_dev->log_dev,
+				"Failed to create sysfs attributes (%d)\n", rc);
 			goto unreg_handler;
 		}
-	}
 
-	/* done */
-	hid_info(hdev, "tb: device probe done.\n");
+		dev_info(tb_dev->log_dev, "Touchbar activated\n");
+	}
 
 	return 0;
 
@@ -1069,6 +1078,8 @@ static void appletb_remove(struct hid_device *hdev)
 			usb_autopm_put_interface(tb_dev->disp_info.usb_iface);
 
 		appletb_mark_active(tb_dev, false);
+
+		dev_info(tb_dev->log_dev, "Touchbar deactivated\n");
 	}
 
 	report_info = appletb_get_report_info(tb_dev, hdev);
@@ -1077,8 +1088,6 @@ static void appletb_remove(struct hid_device *hdev)
 		report_info->usb_iface = NULL;
 		report_info->hdev = NULL;
 	}
-
-	hid_info(hdev, "tb: device remove done.\n");
 }
 
 #ifdef CONFIG_PM
@@ -1114,10 +1123,8 @@ static int appletb_suspend(struct hid_device *hdev, pm_message_t message)
 
 	flush_delayed_work(&tb_dev->tb_work);
 
-	if (!all_suspended) {
-		hid_info(hdev, "device suspend done.\n");
+	if (!all_suspended)
 		return 0;
-	}
 
 	/*
 	 * The touch bar device itself remembers the last state when suspended
@@ -1140,7 +1147,7 @@ static int appletb_suspend(struct hid_device *hdev, pm_message_t message)
 
 	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
 
-	hid_info(hdev, "device suspend done.\n");
+	dev_info(tb_dev->log_dev, "Touchbar suspended.\n");
 
 	return 0;
 }
@@ -1166,17 +1173,17 @@ static int appletb_reset_resume(struct hid_device *hdev)
 		tb_dev->last_event_time = ktime_get();
 
 		appletb_update_touchbar_no_lock(tb_dev, true);
+
+		dev_info(tb_dev->log_dev, "Touchbar resumed.\n");
 	}
 
 	spin_unlock_irqrestore(&tb_dev->tb_lock, flags);
-
-	hid_info(hdev, "device resume done.\n");
 
 	return 0;
 }
 #endif
 
-static struct appletb_device *appletb_alloc_device(void)
+static struct appletb_device *appletb_alloc_device(struct device *log_dev)
 {
 	struct appletb_device *tb_dev;
 
@@ -1188,6 +1195,7 @@ static struct appletb_device *appletb_alloc_device(void)
 	/* initialize structures */
 	spin_lock_init(&tb_dev->tb_lock);
 	INIT_DELAYED_WORK(&tb_dev->tb_work, appletb_set_tb_worker);
+	tb_dev->log_dev = log_dev;
 
 	return tb_dev;
 }
@@ -1217,13 +1225,14 @@ static int appletb_platform_probe(struct platform_device *pdev)
 	struct appletb_device *tb_dev;
 	int rc;
 
-	tb_dev = appletb_alloc_device();
+	tb_dev = appletb_alloc_device(pdata->log_dev);
 	if (!tb_dev)
 		return -ENOMEM;
 
 	rc = appleib_register_hid_driver(ib_dev, &appletb_hid_driver, tb_dev);
 	if (rc) {
-		pr_err("Error registering hid driver: %d\n", rc);
+		dev_err(tb_dev->log_dev, "Error registering hid driver: %d\n",
+			rc);
 		goto error;
 	}
 
@@ -1245,7 +1254,8 @@ static int appletb_platform_remove(struct platform_device *pdev)
 
 	rc = appleib_unregister_hid_driver(ib_dev, &appletb_hid_driver);
 	if (rc) {
-		pr_err("Error unregistering hid driver: %d\n", rc);
+		dev_err(tb_dev->log_dev, "Error unregistering hid driver: %d\n",
+			rc);
 		goto error;
 	}
 

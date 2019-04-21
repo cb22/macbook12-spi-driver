@@ -8,6 +8,7 @@
 #ifndef __LINUX_MFD_APPLE_IBRDIGE_H
 #define __LINUX_MFD_APPLE_IBRDIGE_H
 
+#include <linux/device.h>
 #include <linux/hid.h>
 
 #define PLAT_NAME_IB_TB		"apple-ib-tb"
@@ -17,6 +18,7 @@ struct appleib_device;
 
 struct appleib_platform_data {
 	struct appleib_device *ib_dev;
+	struct device *log_dev;
 };
 
 int appleib_register_hid_driver(struct appleib_device *ib_dev,

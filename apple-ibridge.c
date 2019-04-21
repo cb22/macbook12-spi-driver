@@ -40,8 +40,6 @@
  * iBridge when suspending and resuming.
  */
 
-#define pr_fmt(fmt) "apple-ibridge: " fmt
-
 #include <linux/acpi.h>
 #include <linux/device.h>
 #include <linux/hid.h>
@@ -69,7 +67,10 @@
 
 #define APPLETB_BASIC_CONFIG	1
 
+#define	LOG_DEV(ib_dev)		(&(ib_dev)->acpi_dev->dev)
+
 struct appleib_device {
+	struct acpi_device	*acpi_dev;
 	acpi_handle		asoc_socw;
 	struct list_head	hid_drivers;
 	struct list_head	hid_devices;
@@ -201,7 +202,8 @@ int appleib_unregister_hid_driver(struct appleib_device *ib_dev,
 			mutex_unlock(&ib_dev->update_lock);
 			synchronize_srcu(&ib_dev->lists_srcu);
 			kfree(drv_info);
-			pr_info("unregistered driver '%s'\n", driver->name);
+			dev_info(LOG_DEV(ib_dev), "unregistered driver '%s'\n",
+				 driver->name);
 			return 0;
 		}
 	}
@@ -284,7 +286,7 @@ int appleib_register_hid_driver(struct appleib_device *ib_dev,
 
 	mutex_unlock(&ib_dev->update_lock);
 
-	pr_info("registered driver '%s'\n", driver->name);
+	dev_info(LOG_DEV(ib_dev), "registered driver '%s'\n", driver->name);
 
 	return 0;
 }
@@ -654,9 +656,6 @@ static int appleib_hid_probe(struct hid_device *hdev,
 	if (rc)
 		goto remove_dev;
 
-	/* done */
-	hid_info(hdev, "ib: device probe done.\n");
-
 	return 0;
 
 remove_dev:
@@ -687,8 +686,6 @@ static void appleib_hid_remove(struct hid_device *hdev)
 	mutex_unlock(&ib_dev->update_lock);
 
 	hid_hw_stop(hdev);
-
-	hid_info(hdev, "ib: device remove done.\n");
 }
 
 static const struct hid_device_id appleib_hid_devices[] = {
@@ -711,7 +708,7 @@ static struct hid_driver appleib_hid_driver = {
 #endif
 };
 
-static struct appleib_device *appleib_alloc_device(acpi_handle asoc_handle)
+static struct appleib_device *appleib_alloc_device(struct acpi_device *acpi_dev)
 {
 	struct appleib_device *ib_dev;
 	acpi_status sts;
@@ -728,11 +725,14 @@ static struct appleib_device *appleib_alloc_device(acpi_handle asoc_handle)
 	mutex_init(&ib_dev->update_lock);
 	init_srcu_struct(&ib_dev->lists_srcu);
 
+	ib_dev->acpi_dev = acpi_dev;
+
 	/* get iBridge acpi power control method */
-	sts = acpi_get_handle(asoc_handle, "SOCW", &ib_dev->asoc_socw);
+	sts = acpi_get_handle(acpi_dev->handle, "SOCW", &ib_dev->asoc_socw);
 	if (ACPI_FAILURE(sts)) {
-		pr_err("Error getting handle for ASOC.SOCW method: %s\n",
-		       acpi_format_exception(sts));
+		dev_err(LOG_DEV(ib_dev),
+			"Error getting handle for ASOC.SOCW method: %s\n",
+			acpi_format_exception(sts));
 		rc = -ENXIO;
 		goto free_mem;
 	}
@@ -740,7 +740,8 @@ static struct appleib_device *appleib_alloc_device(acpi_handle asoc_handle)
 	/* ensure iBridge is powered on */
 	sts = acpi_execute_simple_method(ib_dev->asoc_socw, NULL, 1);
 	if (ACPI_FAILURE(sts))
-		pr_warn("SOCW(1) failed: %s\n", acpi_format_exception(sts));
+		dev_warn(LOG_DEV(ib_dev), "SOCW(1) failed: %s\n",
+			 acpi_format_exception(sts));
 
 	return ib_dev;
 
@@ -759,7 +760,7 @@ static int appleib_probe(struct acpi_device *acpi)
 	if (appleib_dev)
 		return -EBUSY;
 
-	ib_dev = appleib_alloc_device(acpi->handle);
+	ib_dev = appleib_alloc_device(acpi);
 	if (IS_ERR_OR_NULL(ib_dev))
 		return PTR_ERR(ib_dev);
 
@@ -777,6 +778,7 @@ static int appleib_probe(struct acpi_device *acpi)
 	}
 
 	pdata->ib_dev = ib_dev;
+	pdata->log_dev = LOG_DEV(ib_dev);
 	for (i = 0; i < ARRAY_SIZE(appleib_subdevs); i++) {
 		ib_dev->subdevs[i].platform_data = pdata;
 		ib_dev->subdevs[i].pdata_size = sizeof(*pdata);
@@ -786,7 +788,7 @@ static int appleib_probe(struct acpi_device *acpi)
 			      ib_dev->subdevs, ARRAY_SIZE(appleib_subdevs),
 			      NULL, 0, NULL);
 	if (ret) {
-		pr_err("Error adding MFD devices: %d\n", ret);
+		dev_err(LOG_DEV(ib_dev), "Error adding MFD devices: %d\n", ret);
 		goto free_pdata;
 	}
 
@@ -795,7 +797,8 @@ static int appleib_probe(struct acpi_device *acpi)
 
 	ret = hid_register_driver(&appleib_hid_driver);
 	if (ret) {
-		pr_err("Error registering hid driver: %d\n", ret);
+		dev_err(LOG_DEV(ib_dev), "Error registering hid driver: %d\n",
+			ret);
 		goto rem_mfd_devs;
 	}
 
@@ -842,9 +845,8 @@ static int appleib_suspend(struct device *dev)
 
 	rc = acpi_execute_simple_method(ib_dev->asoc_socw, NULL, 0);
 	if (ACPI_FAILURE(rc))
-		pr_warn("SOCW(0) failed: %s\n", acpi_format_exception(rc));
-
-	pr_info("device suspend done.\n");
+		dev_warn(LOG_DEV(ib_dev), "SOCW(0) failed: %s\n",
+			 acpi_format_exception(rc));
 
 	return 0;
 }
@@ -860,9 +862,8 @@ static int appleib_resume(struct device *dev)
 
 	rc = acpi_execute_simple_method(ib_dev->asoc_socw, NULL, 1);
 	if (ACPI_FAILURE(rc))
-		pr_warn("SOCW(1) failed: %s\n", acpi_format_exception(rc));
-
-	pr_info("device resume done.\n");
+		dev_warn(LOG_DEV(ib_dev), "SOCW(1) failed: %s\n",
+			 acpi_format_exception(rc));
 
 	return 0;
 }

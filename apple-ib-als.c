@@ -24,7 +24,7 @@
  *    report needs to be requested.
  */
 
-#define pr_fmt(fmt) "apple-ib-als: " fmt
+#define dev_fmt(fmt) "als: " fmt
 
 #include <linux/device.h>
 #include <linux/hid.h>
@@ -45,6 +45,7 @@
 
 struct appleals_device {
 	struct appleib_device	*ib_dev;
+	struct device		*log_dev;
 	struct hid_device	*hid_dev;
 	struct hid_report	*cfg_report;
 	struct hid_field	*illum_field;
@@ -485,7 +486,8 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 	rc = iio_triggered_buffer_setup(iio_dev, &iio_pollfunc_store_time, NULL,
 					NULL);
 	if (rc) {
-		pr_err("failed to set up iio triggers: %d\n", rc);
+		dev_err(als_dev->log_dev, "failed to set up iio triggers: %d\n",
+			rc);
 		goto free_iio_dev;
 	}
 
@@ -501,7 +503,8 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 
 	rc = iio_trigger_register(iio_trig);
 	if (rc) {
-		pr_err("failed to register iio device: %d\n", rc);
+		dev_err(als_dev->log_dev, "failed to register iio trigger: %d\n",
+			rc);
 		goto free_iio_trig;
 	}
 
@@ -509,7 +512,8 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 
 	rc = iio_device_register(iio_dev);
 	if (rc) {
-		pr_err("failed to register iio device: %d\n", rc);
+		dev_err(als_dev->log_dev, "failed to register iio device: %d\n",
+			rc);
 		goto unreg_iio_trig;
 	}
 
@@ -549,11 +553,12 @@ static int appleals_probe(struct hid_device *hdev,
 		return -ENODEV;
 
 	if (als_dev->hid_dev) {
-		pr_warn("Found duplicate ambient light sensor - ignoring\n");
+		dev_warn(als_dev->log_dev,
+			 "Found duplicate ambient light sensor - ignoring\n");
 		return -EBUSY;
 	}
 
-	pr_info("Found ambient light sensor\n");
+	dev_info(als_dev->log_dev, "Found ambient light sensor\n");
 
 	/* initialize device */
 	als_dev->hid_dev = hdev;
@@ -567,9 +572,6 @@ static int appleals_probe(struct hid_device *hdev,
 	rc = appleals_config_iio(als_dev);
 	if (rc)
 		return rc;
-
-	/* done */
-	hid_info(hdev, "device probe done.\n");
 
 	return 0;
 }
@@ -593,8 +595,6 @@ static void appleals_remove(struct hid_device *hdev)
 	}
 
 	als_dev->hid_dev = NULL;
-
-	hid_info(hdev, "device remove done.\n");
 }
 
 #ifdef CONFIG_PM
@@ -633,10 +633,12 @@ static int appleals_platform_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	als_dev->ib_dev = ib_dev;
+	als_dev->log_dev = pdata->log_dev;
 
 	rc = appleib_register_hid_driver(ib_dev, &appleals_hid_driver, als_dev);
 	if (rc) {
-		pr_err("Error registering hid driver: %d\n", rc);
+		dev_err(als_dev->log_dev, "Error registering hid driver: %d\n",
+			rc);
 		goto error;
 	}
 
@@ -658,7 +660,8 @@ static int appleals_platform_remove(struct platform_device *pdev)
 
 	rc = appleib_unregister_hid_driver(ib_dev, &appleals_hid_driver);
 	if (rc) {
-		pr_err("Error unregistering hid driver: %d\n", rc);
+		dev_err(als_dev->log_dev,
+			"Error unregistering hid driver: %d\n", rc);
 		goto error;
 	}
 
