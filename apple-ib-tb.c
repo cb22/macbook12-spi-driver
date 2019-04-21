@@ -26,19 +26,20 @@
 
 #define pr_fmt(fmt) "apple-ib-tb: " fmt
 
+#include <linux/device.h>
+#include <linux/hid.h>
+#include <linux/input.h>
+#include <linux/jiffies.h>
+#include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
-#include <linux/input.h>
-#include <linux/ktime.h>
-#include <linux/hid.h>
-#include <linux/device.h>
-#include <linux/usb.h>
-#include <linux/usb/ch9.h>
-#include <linux/workqueue.h>
-#include <linux/jiffies.h>
 #include <linux/spinlock.h>
 #include <linux/sysfs.h>
+#include <linux/usb/ch9.h>
+#include <linux/usb.h>
+#include <linux/workqueue.h>
+
 #include "apple-ibridge.h"
 
 #define HID_UP_APPLE		0xff120000

@@ -42,22 +42,23 @@
 
 #define pr_fmt(fmt) "apple-ibridge: " fmt
 
-#include <linux/module.h>
-#include <linux/hid.h>
+#include <linux/acpi.h>
 #include <linux/device.h>
-#include <linux/mutex.h>
+#include <linux/hid.h>
 #include <linux/list.h>
-#include <linux/srcu.h>
+#include <linux/mfd/core.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/rculist.h>
 #include <linux/slab.h>
-#include <linux/acpi.h>
+#include <linux/srcu.h>
 #include <linux/usb.h>
-#include <linux/mfd/core.h>
 #include <linux/version.h>
+
 #include "apple-ibridge.h"
 
 #ifdef UPSTREAM
-#include "usbhid/usbhid.h"
+#include "../hid/usbhid/usbhid.h"
 #else
 #define	hid_to_usb_dev(hid_dev) \
 	to_usb_device((hid_dev)->dev.parent->parent)

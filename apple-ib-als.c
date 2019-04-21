@@ -26,16 +26,18 @@
 
 #define pr_fmt(fmt) "apple-ib-als: " fmt
 
+#include <linux/device.h>
+#include <linux/hid.h>
+#include <linux/hid-sensor-ids.h>
+#include <linux/iio/buffer.h>
+#include <linux/iio/iio.h>
+#include <linux/iio/trigger_consumer.h>
+#include <linux/iio/triggered_buffer.h>
+#include <linux/iio/trigger.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
-#include <linux/hid.h>
-#include <linux/hid-sensor-ids.h>
-#include <linux/iio/iio.h>
-#include <linux/iio/buffer.h>
-#include <linux/iio/trigger.h>
-#include <linux/iio/triggered_buffer.h>
-#include <linux/iio/trigger_consumer.h>
+
 #include "apple-ibridge.h"
 
 #define APPLEALS_DYN_SENS		0	/* our dynamic sensitivity */
