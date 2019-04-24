@@ -197,8 +197,8 @@ static int appleals_set_enum_config(struct appleals_device *als_dev,
 		return -EINVAL;
 
 	value = appleals_get_field_value_for_usage(field, value_usage);
-
-	appleals_set_field_value(als_dev, field, value);
+	if (value >= 0)
+		appleals_set_field_value(als_dev, field, value);
 
 	return 0;
 }
@@ -427,7 +427,8 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 					  HID_USAGE_SENSOR_PROY_POWER_STATE);
 	val = appleals_get_field_value_for_usage(field,
 			HID_USAGE_SENSOR_PROP_POWER_STATE_D0_FULL_POWER_ENUM);
-	hid_set_field(field, 0, val);
+	if (val >= 0)
+		hid_set_field(field, 0, val);
 
 	/* configure reporting of change events */
 	field = appleib_find_report_field(als_dev->cfg_report,
@@ -436,7 +437,8 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 		events_enabled ?
 			HID_USAGE_SENSOR_PROP_REPORTING_STATE_ALL_EVENTS_ENUM :
 			HID_USAGE_SENSOR_PROP_REPORTING_STATE_NO_EVENTS_ENUM);
-	hid_set_field(field, 0, val);
+	if (val >= 0)
+		hid_set_field(field, 0, val);
 
 	/* report change events asap */
 	field = appleib_find_report_field(als_dev->cfg_report,
