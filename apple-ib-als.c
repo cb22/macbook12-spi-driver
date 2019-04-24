@@ -572,17 +572,13 @@ static void appleals_remove(struct hid_device *hdev)
 		appleib_get_drvdata(hid_get_drvdata(hdev),
 				    &appleals_hid_driver);
 
-	if (als_dev->iio_dev) {
-		iio_device_unregister(als_dev->iio_dev);
+	iio_device_unregister(als_dev->iio_dev);
 
-		iio_trigger_unregister(als_dev->iio_trig);
-		iio_trigger_free(als_dev->iio_trig);
-		als_dev->iio_trig = NULL;
+	iio_trigger_unregister(als_dev->iio_trig);
+	iio_trigger_free(als_dev->iio_trig);
 
-		iio_triggered_buffer_cleanup(als_dev->iio_dev);
-		iio_device_free(als_dev->iio_dev);
-		als_dev->iio_dev = NULL;
-	}
+	iio_triggered_buffer_cleanup(als_dev->iio_dev);
+	iio_device_free(als_dev->iio_dev);
 
 	als_dev->hid_dev = NULL;
 }
