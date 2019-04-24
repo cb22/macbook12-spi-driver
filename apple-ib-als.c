@@ -335,7 +335,7 @@ static int appleals_write_raw(struct iio_dev *iio_dev,
 		rc = appleals_set_config(als_dev,
 					 HID_USAGE_SENSOR_PROP_REPORT_INTERVAL,
 					 1000000000 / (val * 1000000 + val2));
-		break;
+		return rc;
 
 	case IIO_CHAN_INFO_HYSTERESIS:
 		if (val == APPLEALS_DYN_SENS) {
@@ -345,8 +345,8 @@ static int appleals_write_raw(struct iio_dev *iio_dev,
 							als_dev->illum_field);
 				appleals_update_dyn_sensitivity(als_dev, illum);
 			}
-			rc = 0;
-			break;
+
+			return 0;
 		}
 
 		rc = appleals_set_config(als_dev,
@@ -357,13 +357,12 @@ static int appleals_write_raw(struct iio_dev *iio_dev,
 			als_dev->cur_sensitivity = val;
 			als_dev->cur_hysteresis = val;
 		}
-		break;
+
+		return rc;
 
 	default:
-		rc = -EINVAL;
+		return -EINVAL;
 	}
-
-	return rc;
 }
 
 static const struct iio_chan_spec appleals_channels[] = {
