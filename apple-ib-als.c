@@ -480,8 +480,8 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 	rc = iio_triggered_buffer_setup(iio_dev, &iio_pollfunc_store_time, NULL,
 					NULL);
 	if (rc) {
-		dev_err(als_dev->log_dev, "failed to set up iio triggers: %d\n",
-			rc);
+		dev_err(als_dev->log_dev,
+			"Failed to set up iio triggered buffer: %d\n", rc);
 		goto free_iio_dev;
 	}
 
@@ -497,7 +497,8 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 
 	rc = iio_trigger_register(iio_trig);
 	if (rc) {
-		dev_err(als_dev->log_dev, "failed to register iio trigger: %d\n",
+		dev_err(als_dev->log_dev,
+			"Failed to register iio trigger: %d\n",
 			rc);
 		goto free_iio_trig;
 	}
@@ -506,7 +507,7 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 
 	rc = iio_device_register(iio_dev);
 	if (rc) {
-		dev_err(als_dev->log_dev, "failed to register iio device: %d\n",
+		dev_err(als_dev->log_dev, "Failed to register iio device: %d\n",
 			rc);
 		goto unreg_iio_trig;
 	}
