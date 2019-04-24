@@ -280,9 +280,6 @@ static int appleals_read_raw(struct iio_dev *iio_dev,
 	__s32 value;
 	int rc;
 
-	*val = 0;
-	*val2 = 0;
-
 	switch (mask) {
 	case IIO_CHAN_INFO_RAW:
 	case IIO_CHAN_INFO_PROCESSED:
