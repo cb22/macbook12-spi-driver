@@ -180,14 +180,17 @@ static void appleib_detach_devices(struct appleib_device *ib_dev,
 }
 
 /*
- * Find all drivers that are attached to this device and detach them.
- *
  * Note: this must be run with update_lock held.
  */
-static void appleib_detach_drivers(struct appleib_device *ib_dev,
-				   struct appleib_hid_dev_info *dev_info)
+static void appleib_remove_device(struct appleib_device *ib_dev,
+				  struct appleib_hid_dev_info *dev_info)
 {
+	list_del_rcu(&dev_info->entry);
+	synchronize_srcu(&ib_dev->lists_srcu);
+
 	appleib_remove_driver_attachments(ib_dev, dev_info, NULL);
+
+	kfree(dev_info);
 }
 
 /**
@@ -265,6 +268,7 @@ int appleib_register_hid_driver(struct appleib_device *ib_dev,
 {
 	struct appleib_hid_drv_info *drv_info;
 	struct appleib_hid_dev_info *dev_info;
+	struct appleib_hid_dev_info *tmp;
 	int rc;
 
 	if (!driver->probe)
@@ -281,14 +285,14 @@ int appleib_register_hid_driver(struct appleib_device *ib_dev,
 
 	list_add_tail_rcu(&drv_info->entry, &ib_dev->hid_drivers);
 
-	list_for_each_entry(dev_info, &ib_dev->hid_devices, entry) {
+	list_for_each_entry_safe(dev_info, tmp, &ib_dev->hid_devices, entry) {
 		appleib_stop_hid_events(dev_info);
 
 		appleib_probe_driver(drv_info, dev_info);
 
 		rc = appleib_start_hid_events(dev_info);
 		if (rc)
-			appleib_detach_drivers(ib_dev, dev_info);
+			appleib_remove_device(ib_dev, dev_info);
 	}
 
 	mutex_unlock(&ib_dev->update_lock);
@@ -604,17 +608,6 @@ appleib_add_device(struct appleib_device *ib_dev, struct hid_device *hdev,
 	mutex_unlock(&ib_dev->update_lock);
 
 	return dev_info;
-}
-
-static void appleib_remove_device(struct appleib_device *ib_dev,
-				  struct appleib_hid_dev_info *dev_info)
-{
-	list_del_rcu(&dev_info->entry);
-	synchronize_srcu(&ib_dev->lists_srcu);
-
-	appleib_detach_drivers(ib_dev, dev_info);
-
-	kfree(dev_info);
 }
 
 static int appleib_hid_probe(struct hid_device *hdev,
