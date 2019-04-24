@@ -542,7 +542,6 @@ static int appleals_probe(struct hid_device *hdev,
 				    &appleals_hid_driver);
 	struct hid_field *state_field;
 	struct hid_field *illum_field;
-	int rc;
 
 	/* find als fields and reports */
 	state_field = appleib_find_hid_field(hdev, HID_USAGE_SENSOR_ALS,
@@ -569,11 +568,7 @@ static int appleals_probe(struct hid_device *hdev,
 	als_dev->cur_sensitivity = APPLEALS_DEF_CHANGE_SENS;
 	appleals_config_sensor(als_dev, false, als_dev->cur_sensitivity);
 
-	rc = appleals_config_iio(als_dev);
-	if (rc)
-		return rc;
-
-	return 0;
+	return appleals_config_iio(als_dev);
 }
 
 static void appleals_remove(struct hid_device *hdev)
