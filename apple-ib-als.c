@@ -256,7 +256,6 @@ static int appleals_enable_events(struct iio_trigger *trig, bool enable)
 	struct appleals_device *als_dev = iio_trigger_get_drvdata(trig);
 	int value;
 
-	/* set the sensor's reporting state */
 	appleals_set_enum_config(als_dev, HID_USAGE_SENSOR_PROP_REPORT_STATE,
 		enable ? HID_USAGE_SENSOR_PROP_REPORTING_STATE_ALL_EVENTS_ENUM :
 			 HID_USAGE_SENSOR_PROP_REPORTING_STATE_NO_EVENTS_ENUM);
@@ -418,7 +417,6 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 	if (appleib_needs_io_start(als_dev->ib_dev, als_dev->hid_dev))
 		hid_device_io_start(als_dev->hid_dev);
 
-	/* power on the sensor */
 	field = appleib_find_report_field(als_dev->cfg_report,
 					  HID_USAGE_SENSOR_PROY_POWER_STATE);
 	val = appleals_get_field_value_for_usage(field,
@@ -426,7 +424,6 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 	if (val >= 0)
 		hid_set_field(field, 0, val);
 
-	/* configure reporting of change events */
 	field = appleib_find_report_field(als_dev->cfg_report,
 					  HID_USAGE_SENSOR_PROP_REPORT_STATE);
 	val = appleals_get_field_value_for_usage(field,
@@ -436,7 +433,6 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 	if (val >= 0)
 		hid_set_field(field, 0, val);
 
-	/* report change events asap */
 	field = appleib_find_report_field(als_dev->cfg_report,
 					 HID_USAGE_SENSOR_PROP_REPORT_INTERVAL);
 	hid_set_field(field, 0, field->logical_minimum);
@@ -453,7 +449,6 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 		hid_set_field(field, 0, sensitivity);
 	}
 
-	/* write the new config to the sensor */
 	hid_hw_request(als_dev->hid_dev, als_dev->cfg_report,
 		       HID_REQ_SET_REPORT);
 
@@ -468,7 +463,6 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 	struct appleals_device **priv;
 	int rc;
 
-	/* create and register iio device */
 	iio_dev = iio_device_alloc(sizeof(als_dev));
 	if (!iio_dev)
 		return -ENOMEM;

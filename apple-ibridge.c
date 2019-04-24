@@ -726,12 +726,10 @@ static struct appleib_device *appleib_alloc_device(struct acpi_device *acpi_dev)
 	acpi_status sts;
 	int rc;
 
-	/* allocate */
 	ib_dev = kzalloc(sizeof(*ib_dev), GFP_KERNEL);
 	if (!ib_dev)
 		return ERR_PTR(-ENOMEM);
 
-	/* init structures */
 	INIT_LIST_HEAD(&ib_dev->hid_drivers);
 	INIT_LIST_HEAD(&ib_dev->hid_devices);
 	mutex_init(&ib_dev->update_lock);
