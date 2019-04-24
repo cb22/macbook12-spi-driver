@@ -415,7 +415,7 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 	 * We're (often) in a probe here, so need to enable input processing
 	 * in that case, but only in that case.
 	 */
-	if (appleib_in_hid_probe(als_dev->ib_dev))
+	if (appleib_needs_io_start(als_dev->ib_dev, als_dev->hid_dev))
 		hid_device_io_start(als_dev->hid_dev);
 
 	/* power on the sensor */
@@ -457,7 +457,7 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 	hid_hw_request(als_dev->hid_dev, als_dev->cfg_report,
 		       HID_REQ_SET_REPORT);
 
-	if (appleib_in_hid_probe(als_dev->ib_dev))
+	if (appleib_needs_io_start(als_dev->ib_dev, als_dev->hid_dev))
 		hid_device_io_stop(als_dev->hid_dev);
 };
 

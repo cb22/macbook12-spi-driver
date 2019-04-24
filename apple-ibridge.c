@@ -53,6 +53,8 @@
 #include <linux/usb.h>
 #include <linux/version.h>
 
+#include <asm/barrier.h>
+
 #include "apple-ibridge.h"
 
 #ifdef UPSTREAM
@@ -77,7 +79,7 @@ struct appleib_device {
 	struct mfd_cell		*subdevs;
 	struct mutex		update_lock; /* protect updates to all lists */
 	struct srcu_struct	lists_srcu;
-	bool			in_hid_probe;
+	struct hid_device	*needs_io_start;
 };
 
 struct appleib_hid_drv_info {
@@ -545,14 +547,21 @@ struct hid_field *appleib_find_hid_field(struct hid_device *hdev,
 EXPORT_SYMBOL_GPL(appleib_find_hid_field);
 
 /**
- * Return whether we're currently inside a hid_device_probe or not.
+ * appleib_needs_io_start() - Indicate whether the given hid device needs an
+ * io-start.
  * @ib_dev: the appleib_device
+ * @hdev: the hid_device
+ *
+ * Returns: true if the given hid device needs an io-start in order for
+ * incoming packets to be delivered to the driver, false otherwise.
  */
-bool appleib_in_hid_probe(struct appleib_device *ib_dev)
+bool appleib_needs_io_start(struct appleib_device *ib_dev,
+			    struct hid_device *hdev)
 {
-	return ib_dev->in_hid_probe;
+	/* this may be called from multiple tasks for different hdev's */
+	return smp_load_acquire(&ib_dev->needs_io_start) == hdev;
 }
-EXPORT_SYMBOL_GPL(appleib_in_hid_probe);
+EXPORT_SYMBOL_GPL(appleib_needs_io_start);
 
 static struct appleib_hid_dev_info *
 appleib_add_device(struct appleib_device *ib_dev, struct hid_device *hdev,
@@ -573,13 +582,21 @@ appleib_add_device(struct appleib_device *ib_dev, struct hid_device *hdev,
 	/* notify all our sub drivers */
 	mutex_lock(&ib_dev->update_lock);
 
-	ib_dev->in_hid_probe = true;
+	/*
+	 * Indicate to sub-drivers that we're in a probe() call and therefore
+	 * hid_device_io_start() needs to be explicitly called if the
+	 * sub-driver's probe callback wants to receive incoming packets.
+	 *
+	 * This may be read concurrently from another task for another hdev.
+	 */
+	smp_store_release(&ib_dev->needs_io_start, hdev);
 
 	list_for_each_entry(drv_info, &ib_dev->hid_drivers, entry) {
 		appleib_probe_driver(drv_info, dev_info);
 	}
 
-	ib_dev->in_hid_probe = false;
+	/* this may be read concurrently from another task for another hdev */
+	smp_store_release(&ib_dev->needs_io_start, NULL);
 
 	/* remember this new device */
 	list_add_tail_rcu(&dev_info->entry, &ib_dev->hid_devices);
@@ -665,6 +682,15 @@ static void appleib_hid_remove(struct hid_device *hdev)
 
 	mutex_lock(&ib_dev->update_lock);
 
+	/*
+	 * Indicate to sub-drivers that we're in a remove() call and therefore
+	 * hid_device_io_start() needs to be explicitly called if the
+	 * sub-driver's remove callback wants to receive incoming packets.
+	 *
+	 * This may be read concurrently from another task for another hdev.
+	 */
+	smp_store_release(&ib_dev->needs_io_start, hdev);
+
 	list_for_each_entry(dev_info, &ib_dev->hid_devices, entry) {
 		if (dev_info->device == hdev) {
 			appleib_stop_hid_events(dev_info);
@@ -672,6 +698,9 @@ static void appleib_hid_remove(struct hid_device *hdev)
 			break;
 		}
 	}
+
+	/* this may be read concurrently from another task for another hdev */
+	smp_store_release(&ib_dev->needs_io_start, NULL);
 
 	mutex_unlock(&ib_dev->update_lock);
 

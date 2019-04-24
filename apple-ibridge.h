@@ -28,7 +28,8 @@ int appleib_unregister_hid_driver(struct appleib_device *ib_dev,
 
 void *appleib_get_drvdata(struct appleib_device *ib_dev,
 			  struct hid_driver *driver);
-bool appleib_in_hid_probe(struct appleib_device *ib_dev);
+bool appleib_needs_io_start(struct appleib_device *ib_dev,
+			    struct hid_device *hdev);
 
 struct hid_field *appleib_find_report_field(struct hid_report *report,
 					    unsigned int field_usage);
