@@ -552,7 +552,7 @@ static int appleals_probe(struct hid_device *hdev,
 		return -EBUSY;
 	}
 
-	dev_info(als_dev->log_dev, "Found ambient light sensor\n");
+	dev_dbg(als_dev->log_dev, "Found ambient light sensor\n");
 
 	/* initialize device */
 	als_dev->hid_dev = hdev;

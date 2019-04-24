@@ -212,8 +212,8 @@ int appleib_unregister_hid_driver(struct appleib_device *ib_dev,
 			mutex_unlock(&ib_dev->update_lock);
 			synchronize_srcu(&ib_dev->lists_srcu);
 			kfree(drv_info);
-			dev_info(LOG_DEV(ib_dev), "unregistered driver '%s'\n",
-				 driver->name);
+			dev_dbg(LOG_DEV(ib_dev), "unregistered driver '%s'\n",
+				driver->name);
 			return 0;
 		}
 	}
@@ -301,7 +301,7 @@ int appleib_register_hid_driver(struct appleib_device *ib_dev,
 
 	mutex_unlock(&ib_dev->update_lock);
 
-	dev_info(LOG_DEV(ib_dev), "registered driver '%s'\n", driver->name);
+	dev_dbg(LOG_DEV(ib_dev), "registered driver '%s'\n", driver->name);
 
 	return 0;
 }

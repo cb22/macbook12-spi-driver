@@ -1036,7 +1036,7 @@ static int appletb_probe(struct hid_device *hdev,
 			goto unreg_handler;
 		}
 
-		dev_info(tb_dev->log_dev, "Touchbar activated\n");
+		dev_dbg(tb_dev->log_dev, "Touchbar activated\n");
 	}
 
 	return 0;
