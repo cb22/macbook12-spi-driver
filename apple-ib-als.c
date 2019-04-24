@@ -84,7 +84,7 @@ struct appleals_sensitivity_map {
 	int	illum_high;
 };
 
-static struct appleals_sensitivity_map appleals_sensitivity_map[] = {
+static const struct appleals_sensitivity_map appleals_sensitivity_map[] = {
 	{   1,    0,   14 },
 	{   3,   10,   40 },
 	{   9,   30,  120 },
@@ -96,7 +96,7 @@ static struct appleals_sensitivity_map appleals_sensitivity_map[] = {
 
 static int appleals_compute_sensitivity(int cur_illum, int cur_sens)
 {
-	struct appleals_sensitivity_map *entry;
+	const struct appleals_sensitivity_map *entry;
 	int i;
 
 	/* see if we're still in current range */
