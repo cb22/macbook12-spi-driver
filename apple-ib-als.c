@@ -454,7 +454,7 @@ static void appleals_config_sensor(struct appleals_device *als_dev,
 
 	if (appleib_needs_io_start(als_dev->ib_dev, als_dev->hid_dev))
 		hid_device_io_stop(als_dev->hid_dev);
-};
+}
 
 static int appleals_config_iio(struct appleals_device *als_dev)
 {
