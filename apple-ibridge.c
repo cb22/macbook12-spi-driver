@@ -220,6 +220,10 @@ int appleib_unregister_hid_driver(struct appleib_device *ib_dev,
 
 	mutex_unlock(&ib_dev->update_lock);
 
+	dev_err(LOG_DEV(ib_dev),
+		"Error unregistering hid driver '%s': driver not registered\n",
+		driver->name);
+
 	return -ENOENT;
 }
 EXPORT_SYMBOL_GPL(appleib_unregister_hid_driver);

@@ -625,11 +625,8 @@ static int appleals_platform_probe(struct platform_device *pdev)
 	als_dev->log_dev = pdata->log_dev;
 
 	rc = appleib_register_hid_driver(ib_dev, &appleals_hid_driver, als_dev);
-	if (rc) {
-		dev_err(als_dev->log_dev, "Error registering hid driver: %d\n",
-			rc);
+	if (rc)
 		goto error;
-	}
 
 	platform_set_drvdata(pdev, als_dev);
 
@@ -648,11 +645,8 @@ static int appleals_platform_remove(struct platform_device *pdev)
 	int rc;
 
 	rc = appleib_unregister_hid_driver(ib_dev, &appleals_hid_driver);
-	if (rc) {
-		dev_err(als_dev->log_dev,
-			"Error unregistering hid driver: %d\n", rc);
+	if (rc)
 		goto error;
-	}
 
 	kfree(als_dev);
 

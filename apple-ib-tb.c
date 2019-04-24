@@ -1230,11 +1230,8 @@ static int appletb_platform_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	rc = appleib_register_hid_driver(ib_dev, &appletb_hid_driver, tb_dev);
-	if (rc) {
-		dev_err(tb_dev->log_dev, "Error registering hid driver: %d\n",
-			rc);
+	if (rc)
 		goto error;
-	}
 
 	platform_set_drvdata(pdev, tb_dev);
 
@@ -1253,11 +1250,8 @@ static int appletb_platform_remove(struct platform_device *pdev)
 	int rc;
 
 	rc = appleib_unregister_hid_driver(ib_dev, &appletb_hid_driver);
-	if (rc) {
-		dev_err(tb_dev->log_dev, "Error unregistering hid driver: %d\n",
-			rc);
+	if (rc)
 		goto error;
-	}
 
 	appletb_free_device(tb_dev);
 
