@@ -275,8 +275,8 @@ static int appleals_read_raw(struct iio_dev *iio_dev,
 			     struct iio_chan_spec const *chan,
 			     int *val, int *val2, long mask)
 {
-	struct appleals_device *als_dev =
-				*(struct appleals_device **)iio_priv(iio_dev);
+	struct appleals_device **priv = iio_priv(iio_dev);
+	struct appleals_device *als_dev = *priv;
 	__s32 value;
 	int rc;
 
@@ -325,8 +325,8 @@ static int appleals_write_raw(struct iio_dev *iio_dev,
 			      struct iio_chan_spec const *chan,
 			      int val, int val2, long mask)
 {
-	struct appleals_device *als_dev =
-				*(struct appleals_device **)iio_priv(iio_dev);
+	struct appleals_device **priv = iio_priv(iio_dev);
+	struct appleals_device *als_dev = *priv;
 	__s32 illum;
 	int rc;
 
@@ -466,6 +466,7 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 {
 	struct iio_dev *iio_dev;
 	struct iio_trigger *iio_trig;
+	struct appleals_device **priv;
 	int rc;
 
 	/* create and register iio device */
@@ -473,7 +474,8 @@ static int appleals_config_iio(struct appleals_device *als_dev)
 	if (!iio_dev)
 		return -ENOMEM;
 
-	*(struct appleals_device **)iio_priv(iio_dev) = als_dev;
+	priv = iio_priv(iio_dev);
+	*priv = als_dev;
 
 	iio_dev->channels = appleals_channels;
 	iio_dev->num_channels = ARRAY_SIZE(appleals_channels);
