@@ -180,6 +180,15 @@ static void appleib_remove_device(struct appleib_device *ib_dev,
 	kfree(dev_info);
 }
 
+void appleib_detach_and_free_hid_driver(struct appleib_device *ib_dev,
+					struct appleib_hid_drv_info *drv_info)
+{
+	appleib_detach_devices(ib_dev, drv_info->driver);
+	list_del_rcu(&drv_info->entry);
+	synchronize_srcu(&ib_dev->lists_srcu);
+	kfree(drv_info);
+}
+
 /**
  * Unregister a previously registered HID driver from us.
  * @ib_dev: the appleib_device from which to unregister the driver
@@ -194,11 +203,10 @@ int appleib_unregister_hid_driver(struct appleib_device *ib_dev,
 
 	list_for_each_entry(drv_info, &ib_dev->hid_drivers, entry) {
 		if (drv_info->driver == driver) {
-			appleib_detach_devices(ib_dev, driver);
-			list_del_rcu(&drv_info->entry);
+			appleib_detach_and_free_hid_driver(ib_dev, drv_info);
+
 			mutex_unlock(&ib_dev->update_lock);
-			synchronize_srcu(&ib_dev->lists_srcu);
-			kfree(drv_info);
+
 			dev_dbg(LOG_DEV(ib_dev), "unregistered driver '%s'\n",
 				driver->name);
 			return 0;
