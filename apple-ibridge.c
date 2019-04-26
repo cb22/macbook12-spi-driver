@@ -103,22 +103,6 @@ static const struct mfd_cell appleib_subdevs[] = {
 
 static struct appleib_device *appleib_dev;
 
-#define	call_void_driver_func(drv_info, fn, ...)			\
-	do {								\
-		if ((drv_info)->driver->fn)				\
-			(drv_info)->driver->fn(__VA_ARGS__);		\
-	} while (0)
-
-#define	call_driver_func(drv_info, fn, ret_type, ...)			\
-	({								\
-		ret_type rc = 0;					\
-									\
-		if ((drv_info)->driver->fn)				\
-			rc = (drv_info)->driver->fn(__VA_ARGS__);	\
-									\
-		rc;							\
-	})
-
 static void appleib_remove_driver(struct appleib_device *ib_dev,
 				  struct appleib_hid_drv_info *drv_info,
 				  struct appleib_hid_dev_info *dev_info)
@@ -126,7 +110,8 @@ static void appleib_remove_driver(struct appleib_device *ib_dev,
 	list_del_rcu(&drv_info->entry);
 	synchronize_srcu(&ib_dev->lists_srcu);
 
-	call_void_driver_func(drv_info, remove, dev_info->device);
+	if (drv_info->driver->remove)
+		drv_info->driver->remove(dev_info->device);
 
 	kfree(drv_info);
 }
@@ -137,14 +122,16 @@ static int appleib_probe_driver(struct appleib_hid_drv_info *drv_info,
 	struct appleib_hid_drv_info *d;
 	int rc = 0;
 
-	rc = call_driver_func(drv_info, probe, int, dev_info->device,
-			      dev_info->device_id);
+	if (drv_info->driver->probe)
+		rc = drv_info->driver->probe(dev_info->device,
+					     dev_info->device_id);
 	if (rc)
 		return rc;
 
 	d = kmemdup(drv_info, sizeof(*drv_info), GFP_KERNEL);
 	if (!d) {
-		call_void_driver_func(drv_info, remove, dev_info->device);
+		if (drv_info->driver->remove)
+			drv_info->driver->remove(dev_info->device);
 		return -ENOMEM;
 	}
 
@@ -384,9 +371,13 @@ static int appleib_hid_event_fwd(struct appleib_hid_drv_info *drv_info,
 				 struct hid_device *hdev, void *args)
 {
 	struct appleib_hid_event_args *evt_args = args;
+	int rc = 0;
 
-	return call_driver_func(drv_info, event, int, hdev, evt_args->field,
-				evt_args->usage, evt_args->value);
+	if (drv_info->driver->event)
+		rc = drv_info->driver->event(hdev, evt_args->field,
+					     evt_args->usage, evt_args->value);
+
+	return rc;
 }
 
 static int appleib_hid_event(struct hid_device *hdev, struct hid_field *field,
@@ -445,8 +436,13 @@ static __u8 *appleib_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 static int appleib_input_configured_fwd(struct appleib_hid_drv_info *drv_info,
 					struct hid_device *hdev, void *args)
 {
-	return call_driver_func(drv_info, input_configured, int, hdev,
-				(struct hid_input *)args);
+	struct hid_input *inp = args;
+	int rc = 0;
+
+	if (drv_info->driver->input_configured)
+		rc = drv_info->driver->input_configured(hdev, inp);
+
+	return rc;
 }
 
 static int appleib_input_configured(struct hid_device *hdev,
@@ -460,8 +456,12 @@ static int appleib_input_configured(struct hid_device *hdev,
 static int appleib_hid_suspend_fwd(struct appleib_hid_drv_info *drv_info,
 				   struct hid_device *hdev, void *args)
 {
-	return call_driver_func(drv_info, suspend, int, hdev,
-				*(pm_message_t *)args);
+	int rc = 0;
+
+	if (drv_info->driver->suspend)
+		rc = drv_info->driver->suspend(hdev, *(pm_message_t *)args);
+
+	return rc;
 }
 
 static int appleib_hid_suspend(struct hid_device *hdev, pm_message_t message)
@@ -472,7 +472,12 @@ static int appleib_hid_suspend(struct hid_device *hdev, pm_message_t message)
 static int appleib_hid_resume_fwd(struct appleib_hid_drv_info *drv_info,
 				  struct hid_device *hdev, void *args)
 {
-	return call_driver_func(drv_info, resume, int, hdev);
+	int rc = 0;
+
+	if (drv_info->driver->resume)
+		rc = drv_info->driver->resume(hdev);
+
+	return rc;
 }
 
 static int appleib_hid_resume(struct hid_device *hdev)
@@ -483,7 +488,12 @@ static int appleib_hid_resume(struct hid_device *hdev)
 static int appleib_hid_reset_resume_fwd(struct appleib_hid_drv_info *drv_info,
 					struct hid_device *hdev, void *args)
 {
-	return call_driver_func(drv_info, reset_resume, int, hdev);
+	int rc = 0;
+
+	if (drv_info->driver->reset_resume)
+		rc = drv_info->driver->reset_resume(hdev);
+
+	return rc;
 }
 
 static int appleib_hid_reset_resume(struct hid_device *hdev)
