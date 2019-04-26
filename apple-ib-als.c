@@ -280,7 +280,6 @@ static int appleals_read_raw(struct iio_dev *iio_dev,
 	int rc;
 
 	switch (mask) {
-	case IIO_CHAN_INFO_RAW:
 	case IIO_CHAN_INFO_PROCESSED:
 		*val = appleals_get_field_value(als_dev, als_dev->illum_field);
 		return IIO_VAL_INT;
@@ -369,8 +368,7 @@ static const struct iio_chan_spec appleals_channels[] = {
 		.type = IIO_INTENSITY,
 		.modified = 1,
 		.channel2 = IIO_MOD_LIGHT_BOTH,
-		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED) |
-			BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED),
 		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SAMP_FREQ) |
 			BIT(IIO_CHAN_INFO_HYSTERESIS),
 		.scan_type = {
@@ -382,8 +380,7 @@ static const struct iio_chan_spec appleals_channels[] = {
 	},
 	{
 		.type = IIO_LIGHT,
-		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED) |
-			BIT(IIO_CHAN_INFO_RAW),
+		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED),
 		.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SAMP_FREQ) |
 			BIT(IIO_CHAN_INFO_HYSTERESIS),
 		.scan_type = {
