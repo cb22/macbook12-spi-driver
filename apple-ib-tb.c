@@ -1220,12 +1220,12 @@ static struct hid_driver appletb_hid_driver = {
 
 static int appletb_platform_probe(struct platform_device *pdev)
 {
-	struct appleib_platform_data *pdata = pdev->dev.platform_data;
-	struct appleib_device *ib_dev = pdata->ib_dev;
+	struct appleib_device_data *ddata = pdev->dev.platform_data;
+	struct appleib_device *ib_dev = ddata->ib_dev;
 	struct appletb_device *tb_dev;
 	int rc;
 
-	tb_dev = appletb_alloc_device(pdata->log_dev);
+	tb_dev = appletb_alloc_device(ddata->log_dev);
 	if (!tb_dev)
 		return -ENOMEM;
 
@@ -1244,8 +1244,8 @@ error:
 
 static int appletb_platform_remove(struct platform_device *pdev)
 {
-	struct appleib_platform_data *pdata = pdev->dev.platform_data;
-	struct appleib_device *ib_dev = pdata->ib_dev;
+	struct appleib_device_data *ddata = pdev->dev.platform_data;
+	struct appleib_device *ib_dev = ddata->ib_dev;
 	struct appletb_device *tb_dev = platform_get_drvdata(pdev);
 	int rc;
 

@@ -609,8 +609,8 @@ static struct hid_driver appleals_hid_driver = {
 
 static int appleals_platform_probe(struct platform_device *pdev)
 {
-	struct appleib_platform_data *pdata = pdev->dev.platform_data;
-	struct appleib_device *ib_dev = pdata->ib_dev;
+	struct appleib_device_data *ddata = pdev->dev.platform_data;
+	struct appleib_device *ib_dev = ddata->ib_dev;
 	struct appleals_device *als_dev;
 	int rc;
 
@@ -619,7 +619,7 @@ static int appleals_platform_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	als_dev->ib_dev = ib_dev;
-	als_dev->log_dev = pdata->log_dev;
+	als_dev->log_dev = ddata->log_dev;
 
 	rc = appleib_register_hid_driver(ib_dev, &appleals_hid_driver, als_dev);
 	if (rc)
@@ -636,8 +636,8 @@ error:
 
 static int appleals_platform_remove(struct platform_device *pdev)
 {
-	struct appleib_platform_data *pdata = pdev->dev.platform_data;
-	struct appleib_device *ib_dev = pdata->ib_dev;
+	struct appleib_device_data *ddata = pdev->dev.platform_data;
+	struct appleib_device *ib_dev = ddata->ib_dev;
 	struct appleals_device *als_dev = platform_get_drvdata(pdev);
 	int rc;
 

@@ -777,7 +777,7 @@ free_mem:
 static int appleib_probe(struct acpi_device *acpi)
 {
 	struct appleib_device *ib_dev;
-	struct appleib_platform_data *pdata;
+	struct appleib_device_data *ddata;
 	int i;
 	int ret;
 
@@ -795,17 +795,17 @@ static int appleib_probe(struct acpi_device *acpi)
 		goto free_dev;
 	}
 
-	pdata = kzalloc(sizeof(*pdata), GFP_KERNEL);
-	if (!pdata) {
+	ddata = kzalloc(sizeof(*ddata), GFP_KERNEL);
+	if (!ddata) {
 		ret = -ENOMEM;
 		goto free_subdevs;
 	}
 
-	pdata->ib_dev = ib_dev;
-	pdata->log_dev = LOG_DEV(ib_dev);
+	ddata->ib_dev = ib_dev;
+	ddata->log_dev = LOG_DEV(ib_dev);
 	for (i = 0; i < ARRAY_SIZE(appleib_subdevs); i++) {
-		ib_dev->subdevs[i].platform_data = pdata;
-		ib_dev->subdevs[i].pdata_size = sizeof(*pdata);
+		ib_dev->subdevs[i].platform_data = ddata;
+		ib_dev->subdevs[i].pdata_size = sizeof(*ddata);
 	}
 
 	ret = mfd_add_devices(&acpi->dev, PLATFORM_DEVID_NONE,
@@ -813,7 +813,7 @@ static int appleib_probe(struct acpi_device *acpi)
 			      NULL, 0, NULL);
 	if (ret) {
 		dev_err(LOG_DEV(ib_dev), "Error adding MFD devices: %d\n", ret);
-		goto free_pdata;
+		goto free_ddata;
 	}
 
 	acpi->driver_data = ib_dev;
@@ -830,8 +830,8 @@ static int appleib_probe(struct acpi_device *acpi)
 
 rem_mfd_devs:
 	mfd_remove_devices(&acpi->dev);
-free_pdata:
-	kfree(pdata);
+free_ddata:
+	kfree(ddata);
 free_subdevs:
 	kfree(ib_dev->subdevs);
 free_dev:

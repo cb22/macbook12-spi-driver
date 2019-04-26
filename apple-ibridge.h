@@ -16,7 +16,7 @@
 
 struct appleib_device;
 
-struct appleib_platform_data {
+struct appleib_device_data {
 	struct appleib_device *ib_dev;
 	struct device *log_dev;
 };
