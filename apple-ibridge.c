@@ -617,7 +617,6 @@ appleib_add_device(struct appleib_device *ib_dev, struct hid_device *hdev,
 	struct appleib_hid_dev_info *dev_info;
 	struct appleib_hid_drv_info *drv_info;
 
-	/* allocate device-info for this device */
 	dev_info = kzalloc(sizeof(*dev_info), GFP_KERNEL);
 	if (!dev_info)
 		return NULL;
@@ -626,7 +625,6 @@ appleib_add_device(struct appleib_device *ib_dev, struct hid_device *hdev,
 	dev_info->device = hdev;
 	dev_info->device_id = id;
 
-	/* notify all our sub drivers */
 	mutex_lock(&ib_dev->update_lock);
 
 	/*
@@ -645,7 +643,6 @@ appleib_add_device(struct appleib_device *ib_dev, struct hid_device *hdev,
 	/* this may be read concurrently from another task for another hdev */
 	smp_store_release(&ib_dev->needs_io_start, NULL);
 
-	/* remember this new device */
 	list_add_tail_rcu(&dev_info->entry, &ib_dev->hid_devices);
 
 	mutex_unlock(&ib_dev->update_lock);
@@ -661,7 +658,7 @@ static int appleib_hid_probe(struct hid_device *hdev,
 	struct usb_device *udev;
 	int rc;
 
-	/* check usb config first */
+	/* check and set usb config first */
 	udev = hid_to_usb_dev(hdev);
 
 	if (udev->actconfig->desc.bConfigurationValue != APPLETB_BASIC_CONFIG) {
@@ -669,11 +666,9 @@ static int appleib_hid_probe(struct hid_device *hdev,
 		return rc ? rc : -ENODEV;
 	}
 
-	/* Assign the driver data */
 	ib_dev = appleib_dev;
 	hid_set_drvdata(hdev, ib_dev);
 
-	/* initialize the report info */
 	rc = hid_parse(hdev);
 	if (rc) {
 		hid_err(hdev, "ib: hid parse failed (%d)\n", rc);
@@ -687,14 +682,12 @@ static int appleib_hid_probe(struct hid_device *hdev,
 		goto error;
 	}
 
-	/* add this hdev to our device list */
 	dev_info = appleib_add_device(ib_dev, hdev, id);
 	if (!dev_info) {
 		rc = -ENOMEM;
 		goto stop_hw;
 	}
 
-	/* start the hid */
 	rc = appleib_start_hid_events(dev_info);
 	if (rc)
 		goto remove_dev;
@@ -780,7 +773,7 @@ static struct appleib_device *appleib_alloc_device(struct acpi_device *acpi_dev)
 
 	ib_dev->acpi_dev = acpi_dev;
 
-	/* get iBridge acpi power control method */
+	/* get iBridge acpi power control method for suspend/resume */
 	sts = acpi_get_handle(acpi_dev->handle, "SOCW", &ib_dev->asoc_socw);
 	if (ACPI_FAILURE(sts)) {
 		dev_err(LOG_DEV(ib_dev),
