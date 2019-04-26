@@ -762,9 +762,8 @@ static struct appleib_device *appleib_alloc_device(struct acpi_device *acpi_dev)
 {
 	struct appleib_device *ib_dev;
 	acpi_status sts;
-	int rc;
 
-	ib_dev = kzalloc(sizeof(*ib_dev), GFP_KERNEL);
+	ib_dev = devm_kzalloc(&acpi_dev->dev, sizeof(*ib_dev), GFP_KERNEL);
 	if (!ib_dev)
 		return ERR_PTR(-ENOMEM);
 
@@ -781,8 +780,7 @@ static struct appleib_device *appleib_alloc_device(struct acpi_device *acpi_dev)
 		dev_err(LOG_DEV(ib_dev),
 			"Error getting handle for ASOC.SOCW method: %s\n",
 			acpi_format_exception(sts));
-		rc = -ENXIO;
-		goto free_mem;
+		return ERR_PTR(-ENXIO);
 	}
 
 	/* ensure iBridge is powered on */
@@ -792,10 +790,6 @@ static struct appleib_device *appleib_alloc_device(struct acpi_device *acpi_dev)
 			 acpi_format_exception(sts));
 
 	return ib_dev;
-
-free_mem:
-	kfree(ib_dev);
-	return ERR_PTR(rc);
 }
 
 static int appleib_probe(struct acpi_device *acpi)
@@ -819,15 +813,14 @@ static int appleib_probe(struct acpi_device *acpi)
 		ib_dev->subdevs[i].pdata_size = sizeof(ib_dev->dev_data);
 	}
 
-	ret = mfd_add_devices(&acpi->dev, PLATFORM_DEVID_NONE,
-			      ib_dev->subdevs, ARRAY_SIZE(ib_dev->subdevs),
-			      NULL, 0, NULL);
+	ret = devm_mfd_add_devices(&acpi->dev, PLATFORM_DEVID_NONE,
+				   ib_dev->subdevs, ARRAY_SIZE(ib_dev->subdevs),
+				   NULL, 0, NULL);
 	if (ret) {
 		dev_err(LOG_DEV(ib_dev), "Error adding MFD devices: %d\n", ret);
-		goto free_dev;
+		return ret;
 	}
 
-	acpi->driver_data = ib_dev;
 	memcpy(ib_dev->ib_dev_ids, appleib_hid_ids,
 	       ARRAY_SIZE(ib_dev->ib_dev_ids) * sizeof(ib_dev->ib_dev_ids[0]));
 	memcpy(&ib_dev->ib_driver, &appleib_hid_driver,
@@ -842,27 +835,19 @@ static int appleib_probe(struct acpi_device *acpi)
 	if (ret) {
 		dev_err(LOG_DEV(ib_dev), "Error registering hid driver: %d\n",
 			ret);
-		goto rem_mfd_devs;
+		return ret;
 	}
 
-	return 0;
+	acpi->driver_data = ib_dev;
 
-rem_mfd_devs:
-	mfd_remove_devices(&acpi->dev);
-free_dev:
-	acpi->driver_data = NULL;
-	kfree(ib_dev);
-	return ret;
+	return 0;
 }
 
 static int appleib_remove(struct acpi_device *acpi)
 {
 	struct appleib_device *ib_dev = acpi_driver_data(acpi);
 
-	mfd_remove_devices(&acpi->dev);
-	hid_unregister_driver(&appleib_hid_driver);
-
-	kfree(ib_dev);
+	hid_unregister_driver(&ib_dev->ib_driver);
 
 	return 0;
 }
