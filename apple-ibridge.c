@@ -882,16 +882,14 @@ static int appleib_remove(struct acpi_device *acpi)
 
 static int appleib_suspend(struct device *dev)
 {
-	struct acpi_device *adev;
 	struct appleib_device *ib_dev;
 	int rc;
 
-	adev = to_acpi_device(dev);
-	ib_dev = acpi_driver_data(adev);
+	ib_dev = acpi_driver_data(to_acpi_device(dev));
 
 	rc = acpi_execute_simple_method(ib_dev->asoc_socw, NULL, 0);
 	if (ACPI_FAILURE(rc))
-		dev_warn(LOG_DEV(ib_dev), "SOCW(0) failed: %s\n",
+		dev_warn(dev, "SOCW(0) failed: %s\n",
 			 acpi_format_exception(rc));
 
 	return 0;
@@ -899,16 +897,14 @@ static int appleib_suspend(struct device *dev)
 
 static int appleib_resume(struct device *dev)
 {
-	struct acpi_device *adev;
 	struct appleib_device *ib_dev;
 	int rc;
 
-	adev = to_acpi_device(dev);
-	ib_dev = acpi_driver_data(adev);
+	ib_dev = acpi_driver_data(to_acpi_device(dev));
 
 	rc = acpi_execute_simple_method(ib_dev->asoc_socw, NULL, 1);
 	if (ACPI_FAILURE(rc))
-		dev_warn(LOG_DEV(ib_dev), "SOCW(1) failed: %s\n",
+		dev_warn(dev, "SOCW(1) failed: %s\n",
 			 acpi_format_exception(rc));
 
 	return 0;
