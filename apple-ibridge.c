@@ -6,6 +6,8 @@
  */
 
 /**
+ * DOC: Overview
+ *
  * MacBookPro models with a Touch Bar (13,[23] and 14,[23]) have an Apple
  * iBridge chip (also known as T1 chip) which exposes the touch bar,
  * built-in webcam (iSight), ambient light sensor, and Secure Enclave
@@ -190,9 +192,12 @@ void appleib_detach_and_free_hid_driver(struct appleib_device *ib_dev,
 }
 
 /**
- * Unregister a previously registered HID driver from us.
+ * appleib_unregister_hid_driver() - Unregister a previously registered HID
+ * driver from us.
  * @ib_dev: the appleib_device from which to unregister the driver
  * @driver: the driver to unregister
+ *
+ * Return: 0 on success, or -ENOENT if the driver isn't currently registered.
  */
 int appleib_unregister_hid_driver(struct appleib_device *ib_dev,
 				  struct hid_driver *driver)
@@ -256,11 +261,13 @@ static void appleib_stop_hid_events(struct appleib_hid_dev_info *dev_info)
 }
 
 /**
- * Register a HID driver with us.
+ * appleib_register_hid_driver() - Register a HID driver with us.
  * @ib_dev: the appleib_device with which to register the driver
  * @driver: the driver to register
  * @data: the driver-data to associate with the driver; this is available
- *        from appleib_get_drvdata(...).
+ *        from appleib_get_drvdata().
+ *
+ * Return: 0 on success or -errno
  */
 int appleib_register_hid_driver(struct appleib_device *ib_dev,
 				struct hid_driver *driver, void *data)
@@ -303,11 +310,15 @@ int appleib_register_hid_driver(struct appleib_device *ib_dev,
 EXPORT_SYMBOL_GPL(appleib_register_hid_driver);
 
 /**
- * Get the driver-specific data associated with the given, previously
- * registered HID driver (provided in the appleib_register_hid_driver()
- * call).
+ * appleib_get_drvdata() - Get the driver-specific data associated with the
+ * given HID driver.
  * @ib_dev: the appleib_device with which the driver was registered
  * @driver: the driver for which to get the data
+ *
+ * Gets the driver-specific data for a registered driver that provided in the
+ * appleib_register_hid_driver() call.
+ *
+ * Returns: the driver data, or NULL if the driver is not registered.
  */
 void *appleib_get_drvdata(struct appleib_device *ib_dev,
 			  struct hid_driver *driver)
@@ -331,12 +342,16 @@ void *appleib_get_drvdata(struct appleib_device *ib_dev,
 }
 EXPORT_SYMBOL_GPL(appleib_get_drvdata);
 
-/*
- * Forward a hid-driver callback to all registered sub-drivers. This is for
- * callbacks that return a status as an int.
+/**
+ * appleib_forward_int_op() - Forward a hid-driver callback to all registered
+ * sub-drivers.
  * @hdev the hid-device
  * @forward a function that calls the callback on the given driver
  * @args arguments for the forward function
+ *
+ * This is for callbacks that return a status as an int.
+ *
+ * Returns: 0 on success, or the first error returned by the @forward function.
  */
 static int appleib_forward_int_op(struct hid_device *hdev,
 				  int (*forward)(struct appleib_hid_drv_info *,
@@ -511,9 +526,12 @@ static int appleib_hid_reset_resume(struct hid_device *hdev)
 #endif /* CONFIG_PM */
 
 /**
- * Find the field in the report with the given usage.
+ * appleib_find_report_field() - Find the field in the report with the given
+ * usage.
  * @report: the report to search
  * @field_usage: the usage of the field to search for
+ *
+ * Returns: the hid field if found, or NULL if none found.
  */
 struct hid_field *appleib_find_report_field(struct hid_report *report,
 					    unsigned int field_usage)
@@ -537,11 +555,14 @@ struct hid_field *appleib_find_report_field(struct hid_report *report,
 EXPORT_SYMBOL_GPL(appleib_find_report_field);
 
 /**
- * Search all the reports of the device for the field with the given usage.
+ * appleib_find_hid_field() - Search all the reports of the device for the
+ * field with the given usage.
  * @hdev: the device whose reports to search
  * @application: the usage of application collection that the field must
  *               belong to
  * @field_usage: the usage of the field to search for
+ *
+ * Returns: the hid field if found, or NULL if none found.
  */
 struct hid_field *appleib_find_hid_field(struct hid_device *hdev,
 					 unsigned int application,
