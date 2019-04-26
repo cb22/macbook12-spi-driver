@@ -78,6 +78,11 @@ static const struct mfd_cell appleib_subdevs[] = {
 	{ .name = PLAT_NAME_IB_ALS },
 };
 
+static const struct hid_device_id appleib_hid_ids[] = {
+	{ HID_USB_DEVICE(USB_ID_VENDOR_APPLE, USB_ID_PRODUCT_IBRIDGE) },
+	{ },
+};
+
 struct appleib_device {
 	struct acpi_device		*acpi_dev;
 	acpi_handle			asoc_socw;
@@ -89,6 +94,8 @@ struct appleib_device {
 	struct srcu_struct		lists_srcu;
 	struct hid_device		*needs_io_start;
 	struct appleib_device_data	dev_data;
+	struct hid_driver		ib_driver;
+	struct hid_device_id		ib_dev_ids[ARRAY_SIZE(appleib_hid_ids)];
 };
 
 struct appleib_hid_drv_info {
@@ -104,8 +111,6 @@ struct appleib_hid_dev_info {
 	const struct hid_device_id	*device_id;
 	bool				started;
 };
-
-static struct appleib_device *appleib_dev;
 
 static void appleib_remove_driver(struct appleib_device *ib_dev,
 				  struct appleib_hid_drv_info *drv_info,
@@ -668,7 +673,7 @@ static int appleib_hid_probe(struct hid_device *hdev,
 		return rc ? rc : -ENODEV;
 	}
 
-	ib_dev = appleib_dev;
+	ib_dev = (void *)id->driver_data;
 	hid_set_drvdata(hdev, ib_dev);
 
 	rc = hid_parse(hdev);
@@ -738,14 +743,9 @@ static void appleib_hid_remove(struct hid_device *hdev)
 	hid_hw_stop(hdev);
 }
 
-static const struct hid_device_id appleib_hid_devices[] = {
-	{ HID_USB_DEVICE(USB_ID_VENDOR_APPLE, USB_ID_PRODUCT_IBRIDGE) },
-	{ },
-};
-
-static struct hid_driver appleib_hid_driver = {
+static const struct hid_driver appleib_hid_driver = {
 	.name = "apple-ibridge-hid",
-	.id_table = appleib_hid_devices,
+	.id_table = appleib_hid_ids,
 	.probe = appleib_hid_probe,
 	.remove = appleib_hid_remove,
 	.event = appleib_hid_event,
@@ -804,9 +804,6 @@ static int appleib_probe(struct acpi_device *acpi)
 	int i;
 	int ret;
 
-	if (appleib_dev)
-		return -EBUSY;
-
 	ib_dev = appleib_alloc_device(acpi);
 	if (IS_ERR_OR_NULL(ib_dev))
 		return PTR_ERR(ib_dev);
@@ -831,9 +828,17 @@ static int appleib_probe(struct acpi_device *acpi)
 	}
 
 	acpi->driver_data = ib_dev;
-	appleib_dev = ib_dev;
+	memcpy(ib_dev->ib_dev_ids, appleib_hid_ids,
+	       ARRAY_SIZE(ib_dev->ib_dev_ids) * sizeof(ib_dev->ib_dev_ids[0]));
+	memcpy(&ib_dev->ib_driver, &appleib_hid_driver,
+	       sizeof(ib_dev->ib_driver));
 
-	ret = hid_register_driver(&appleib_hid_driver);
+	for (i = 0; i < ARRAY_SIZE(ib_dev->ib_dev_ids); i++)
+		ib_dev->ib_dev_ids[i].driver_data = (kernel_ulong_t)ib_dev;
+
+	ib_dev->ib_driver.id_table = ib_dev->ib_dev_ids;
+
+	ret = hid_register_driver(&ib_dev->ib_driver);
 	if (ret) {
 		dev_err(LOG_DEV(ib_dev), "Error registering hid driver: %d\n",
 			ret);
@@ -845,7 +850,6 @@ static int appleib_probe(struct acpi_device *acpi)
 rem_mfd_devs:
 	mfd_remove_devices(&acpi->dev);
 free_dev:
-	appleib_dev = NULL;
 	acpi->driver_data = NULL;
 	kfree(ib_dev);
 	return ret;
@@ -857,9 +861,6 @@ static int appleib_remove(struct acpi_device *acpi)
 
 	mfd_remove_devices(&acpi->dev);
 	hid_unregister_driver(&appleib_hid_driver);
-
-	if (appleib_dev == ib_dev)
-		appleib_dev = NULL;
 
 	kfree(ib_dev);
 
