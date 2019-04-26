@@ -73,15 +73,22 @@
 
 #define	LOG_DEV(ib_dev)		(&(ib_dev)->acpi_dev->dev)
 
+static const struct mfd_cell appleib_subdevs[] = {
+	{ .name = PLAT_NAME_IB_TB },
+	{ .name = PLAT_NAME_IB_ALS },
+};
+
 struct appleib_device {
-	struct acpi_device	*acpi_dev;
-	acpi_handle		asoc_socw;
-	struct list_head	hid_drivers;
-	struct list_head	hid_devices;
-	struct mfd_cell		*subdevs;
-	struct mutex		update_lock; /* protect updates to all lists */
-	struct srcu_struct	lists_srcu;
-	struct hid_device	*needs_io_start;
+	struct acpi_device		*acpi_dev;
+	acpi_handle			asoc_socw;
+	struct list_head		hid_drivers;
+	struct list_head		hid_devices;
+	struct mfd_cell			subdevs[ARRAY_SIZE(appleib_subdevs)];
+	/* protect updates to all lists */
+	struct mutex			update_lock;
+	struct srcu_struct		lists_srcu;
+	struct hid_device		*needs_io_start;
+	struct appleib_device_data	dev_data;
 };
 
 struct appleib_hid_drv_info {
@@ -96,11 +103,6 @@ struct appleib_hid_dev_info {
 	struct hid_device		*device;
 	const struct hid_device_id	*device_id;
 	bool				started;
-};
-
-static const struct mfd_cell appleib_subdevs[] = {
-	{ .name = PLAT_NAME_IB_TB },
-	{ .name = PLAT_NAME_IB_ALS },
 };
 
 static struct appleib_device *appleib_dev;
@@ -799,7 +801,6 @@ free_mem:
 static int appleib_probe(struct acpi_device *acpi)
 {
 	struct appleib_device *ib_dev;
-	struct appleib_device_data *ddata;
 	int i;
 	int ret;
 
@@ -810,32 +811,23 @@ static int appleib_probe(struct acpi_device *acpi)
 	if (IS_ERR_OR_NULL(ib_dev))
 		return PTR_ERR(ib_dev);
 
-	ib_dev->subdevs = kmemdup(appleib_subdevs, sizeof(appleib_subdevs),
-				  GFP_KERNEL);
-	if (!ib_dev->subdevs) {
-		ret = -ENOMEM;
-		goto free_dev;
-	}
+	memcpy(ib_dev->subdevs, appleib_subdevs,
+	       ARRAY_SIZE(ib_dev->subdevs) * sizeof(ib_dev->subdevs[0]));
 
-	ddata = kzalloc(sizeof(*ddata), GFP_KERNEL);
-	if (!ddata) {
-		ret = -ENOMEM;
-		goto free_subdevs;
-	}
+	ib_dev->dev_data.ib_dev = ib_dev;
+	ib_dev->dev_data.log_dev = LOG_DEV(ib_dev);
 
-	ddata->ib_dev = ib_dev;
-	ddata->log_dev = LOG_DEV(ib_dev);
-	for (i = 0; i < ARRAY_SIZE(appleib_subdevs); i++) {
-		ib_dev->subdevs[i].platform_data = ddata;
-		ib_dev->subdevs[i].pdata_size = sizeof(*ddata);
+	for (i = 0; i < ARRAY_SIZE(ib_dev->subdevs); i++) {
+		ib_dev->subdevs[i].platform_data = &ib_dev->dev_data;
+		ib_dev->subdevs[i].pdata_size = sizeof(ib_dev->dev_data);
 	}
 
 	ret = mfd_add_devices(&acpi->dev, PLATFORM_DEVID_NONE,
-			      ib_dev->subdevs, ARRAY_SIZE(appleib_subdevs),
+			      ib_dev->subdevs, ARRAY_SIZE(ib_dev->subdevs),
 			      NULL, 0, NULL);
 	if (ret) {
 		dev_err(LOG_DEV(ib_dev), "Error adding MFD devices: %d\n", ret);
-		goto free_ddata;
+		goto free_dev;
 	}
 
 	acpi->driver_data = ib_dev;
@@ -852,10 +844,6 @@ static int appleib_probe(struct acpi_device *acpi)
 
 rem_mfd_devs:
 	mfd_remove_devices(&acpi->dev);
-free_ddata:
-	kfree(ddata);
-free_subdevs:
-	kfree(ib_dev->subdevs);
 free_dev:
 	appleib_dev = NULL;
 	acpi->driver_data = NULL;
@@ -873,8 +861,6 @@ static int appleib_remove(struct acpi_device *acpi)
 	if (appleib_dev == ib_dev)
 		appleib_dev = NULL;
 
-	kfree(ib_dev->subdevs[0].platform_data);
-	kfree(ib_dev->subdevs);
 	kfree(ib_dev);
 
 	return 0;
