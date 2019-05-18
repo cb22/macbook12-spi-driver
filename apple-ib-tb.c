@@ -73,15 +73,29 @@
 
 static int appletb_tb_def_idle_timeout = 5 * 60;
 module_param_named(idle_timeout, appletb_tb_def_idle_timeout, int, 0444);
-MODULE_PARM_DESC(idle_timeout, "Default touch bar idle timeout (in seconds); 0 turns touch bar off, -1 disables timeout, -2 disables touch bar completely");
+MODULE_PARM_DESC(idle_timeout, "Default touch bar idle timeout:\n"
+			       "    >0 - turn touch bar display off after no keyboard, trackpad, or touch bar input has been received for this many seconds;\n"
+			       "         the display will be turned back on as soon as new input is received\n"
+			       "     0 - turn touch bar display off (input does not turn it on again)\n"
+			       "    -1 - turn touch bar display on (does not turn off automatically)\n"
+			       "    -2 - disable touch bar completely");
 
 static int appletb_tb_def_dim_timeout = -2;
 module_param_named(dim_timeout, appletb_tb_def_dim_timeout, int, 0444);
-MODULE_PARM_DESC(dim_timeout, "Default touch bar dim timeout (in seconds); 0 means always dimmmed, -1 disables dimming, [-2] calculates timeout based on idle-timeout");
+MODULE_PARM_DESC(dim_timeout, "Default touch bar dim timeout:\n"
+			      "    >0 - dim touch bar display after no keyboard, trackpad, or touch bar input has been received for this many seconds\n"
+			      "         the display will be returned to full brightness as soon as new input is received\n"
+			      "     0 - dim touch bar display (input does not return it to full brightness)\n"
+			      "    -1 - disable timeout (touch bar never dimmed)\n"
+			      "    [-2] - calculate timeout based on idle-timeout");
 
 static int appletb_tb_def_fn_mode = APPLETB_FN_MODE_NORM;
 module_param_named(fnmode, appletb_tb_def_fn_mode, int, 0444);
-MODULE_PARM_DESC(fnmode, "Default Fn key mode: 0 = f-keys only, [1] = fn key switches from special to f-keys, 2 = inverse of 1, 3 = special keys only");
+MODULE_PARM_DESC(fnmode, "Default Fn key mode:\n"
+			 "    0 - function-keys only\n"
+			 "    [1] - fn key switches from special to function-keys\n"
+			 "    2 - inverse of 1\n"
+			 "    3 - special keys only");
 
 static ssize_t idle_timeout_show(struct device *dev,
 				 struct device_attribute *attr, char *buf);
@@ -496,7 +510,7 @@ static void appletb_update_touchbar_no_lock(struct appletb_device *tb_dev,
 		want_mode = appletb_get_fn_tb_mode(tb_dev);
 		want_disp = tb_dev->idle_timeout ==  0 ? APPLETB_CMD_DISP_OFF :
 			    tb_dev->dim_timeout  ==  0 ? APPLETB_CMD_DISP_DIM :
-						         APPLETB_CMD_DISP_ON;
+							 APPLETB_CMD_DISP_ON;
 	}
 
 	/*
