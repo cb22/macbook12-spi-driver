@@ -73,7 +73,7 @@
 
 static int appletb_tb_def_idle_timeout = 5 * 60;
 module_param_named(idle_timeout, appletb_tb_def_idle_timeout, int, 0444);
-MODULE_PARM_DESC(idle_timeout, "Default touch bar idle timeout (in seconds); 0 disables touch bar, -1 disables timeout");
+MODULE_PARM_DESC(idle_timeout, "Default touch bar idle timeout (in seconds); 0 turns touch bar off, -1 disables timeout, -2 disables touch bar completely");
 
 static int appletb_tb_def_dim_timeout = -2;
 module_param_named(dim_timeout, appletb_tb_def_dim_timeout, int, 0444);
@@ -360,12 +360,12 @@ static void appletb_set_tb_worker(struct work_struct *work)
 	tb_dev->restore_autopm = false;
 
 	/* calculate time left to next timeout */
-	if (tb_dev->idle_timeout <= 0 && tb_dev->dim_timeout <= 0)
+	if (tb_dev->idle_timeout == -2 || tb_dev->idle_timeout == 0)
 		min_timeout = -1;
+	else if (tb_dev->idle_timeout == -1)
+		min_timeout = tb_dev->dim_timeout;
 	else if (tb_dev->dim_timeout <= 0)
 		min_timeout = tb_dev->idle_timeout;
-	else if (tb_dev->idle_timeout <= 0)
-		min_timeout = tb_dev->dim_timeout;
 	else
 		min_timeout = min(tb_dev->dim_timeout, tb_dev->idle_timeout);
 
@@ -381,6 +381,9 @@ static void appletb_set_tb_worker(struct work_struct *work)
 			time_to_off = 0;
 		else
 			time_to_off = tb_dev->idle_timeout - idle_time;
+	} else {
+		/* not used - just to appease the compiler */
+		time_to_off = 0;
 	}
 
 	any_tb_key_pressed = appletb_any_tb_key_pressed(tb_dev);
@@ -477,21 +480,23 @@ static void appletb_update_touchbar_no_lock(struct appletb_device *tb_dev,
 	/*
 	 * Calculate the new modes:
 	 *   idle_timeout:
-	 *     -1  always on
-	 *      0  always off
-	 *     >0  turn off after idle_timeout seconds
-	 *   dim_timeout (only valid if idle_timeout != 0):
-	 *     -1  never dimmed
-	 *      0  always dimmed
-	 *     >0  dim off after dim_timeout seconds
+	 *     -2  mode/disp off
+	 *     -1  mode on, disp on/dim
+	 *      0  mode on, disp off
+	 *     >0  mode on, disp off after idle_timeout seconds
+	 *   dim_timeout (only valid if idle_timeout > 0 || idle_timeout == -1):
+	 *     -1  disp never dimmed
+	 *      0  disp always dimmed
+	 *     >0  disp dim after dim_timeout seconds
 	 */
-	if (tb_dev->idle_timeout == 0) {
+	if (tb_dev->idle_timeout == -2) {
 		want_mode = APPLETB_CMD_MODE_OFF;
 		want_disp = APPLETB_CMD_DISP_OFF;
 	} else {
 		want_mode = appletb_get_fn_tb_mode(tb_dev);
-		want_disp = tb_dev->dim_timeout == 0 ? APPLETB_CMD_DISP_DIM :
-						       APPLETB_CMD_DISP_ON;
+		want_disp = tb_dev->idle_timeout ==  0 ? APPLETB_CMD_DISP_OFF :
+			    tb_dev->dim_timeout  ==  0 ? APPLETB_CMD_DISP_DIM :
+						         APPLETB_CMD_DISP_ON;
 	}
 
 	/*
@@ -542,8 +547,10 @@ static void appletb_update_touchbar(struct appletb_device *tb_dev, bool force)
 static void appletb_set_idle_timeout(struct appletb_device *tb_dev, int new)
 {
 	tb_dev->idle_timeout = new;
-	if (tb_dev->dim_to_is_calc)
+	if (tb_dev->dim_to_is_calc && tb_dev->idle_timeout > 0)
 		tb_dev->dim_timeout = new - min(APPLETB_MAX_DIM_TIME, new / 3);
+	else if (tb_dev->dim_to_is_calc)
+		tb_dev->dim_timeout = -1;
 }
 
 static ssize_t idle_timeout_show(struct device *dev,
@@ -565,7 +572,7 @@ static ssize_t idle_timeout_store(struct device *dev,
 	int rc;
 
 	rc = kstrtol(buf, 0, &new);
-	if (rc || new > INT_MAX || new < -1)
+	if (rc || new > INT_MAX || new < -2)
 		return -EINVAL;
 
 	appletb_set_idle_timeout(tb_dev, new);
