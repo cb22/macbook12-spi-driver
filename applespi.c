@@ -1428,9 +1428,14 @@ applespi_register_touchpad_device(struct applespi_data *applespi,
 	input_set_capability(touchpad_input_dev, EV_KEY, BTN_LEFT);
 
 	/* multitouch */
-	input_mt_init_slots(touchpad_input_dev, MAX_FINGERS,
-			    INPUT_MT_POINTER | INPUT_MT_DROP_UNUSED |
-			    INPUT_MT_TRACK);
+	sts = input_mt_init_slots(touchpad_input_dev, MAX_FINGERS,
+				  INPUT_MT_POINTER | INPUT_MT_DROP_UNUSED |
+					INPUT_MT_TRACK);
+	if (sts) {
+		dev_err(&applespi->spi->dev,
+			"failed to initialize slots: %d", sts);
+		return sts;
+	}
 
 	/* register input device */
 	sts = input_register_device(touchpad_input_dev);
