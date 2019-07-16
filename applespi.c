@@ -132,11 +132,11 @@ MODULE_PARM_DESC(touchpad_dimensions, "The pixel dimensions of the touchpad, as 
  *			this struct) minus this @crc16 field
  */
 struct keyboard_protocol {
-	__u8			unknown1;
-	__u8			modifiers;
-	__u8			unknown2;
-	__u8			keys_pressed[MAX_ROLLOVER];
-	__u8			fn_pressed;
+	u8			unknown1;
+	u8			modifiers;
+	u8			unknown2;
+	u8			keys_pressed[MAX_ROLLOVER];
+	u8			fn_pressed;
 	__le16			crc16;
 };
 
@@ -190,12 +190,12 @@ struct tp_finger {
  * @fingers:		the data for each finger
  */
 struct touchpad_protocol {
-	__u8			unknown1[1];
-	__u8			clicked;
-	__u8			unknown2[28];
-	__u8			number_of_fingers;
-	__u8			clicked2;
-	__u8			unknown3[16];
+	u8			unknown1[1];
+	u8			clicked;
+	u8			unknown2[28];
+	u8			number_of_fingers;
+	u8			clicked2;
+	u8			unknown3[16];
 	struct tp_finger	fingers[0];
 };
 
@@ -223,10 +223,10 @@ struct command_protocol_tp_info {
  *			this struct) minus this @crc16 field
  */
 struct touchpad_info_protocol {
-	__u8			unknown1[105];
-	__u8			model_flags;
-	__u8			model_no;
-	__u8			unknown2[3];
+	u8			unknown1[105];
+	u8			model_flags;
+	u8			model_no;
+	u8			unknown2[3];
 	__le16			crc16;
 };
 
@@ -253,8 +253,8 @@ struct command_protocol_mt_init {
  *			this struct) minus this @crc16 field
  */
 struct command_protocol_capsl {
-	__u8			unknown;
-	__u8			led;
+	u8			unknown;
+	u8			led;
 	__le16			crc16;
 };
 
@@ -299,8 +299,8 @@ struct command_protocol_bl {
  */
 struct message {
 	__le16		type;
-	__u8		zero;
-	__u8		counter;
+	u8		zero;
+	u8		counter;
 	__le16		rsp_buf_len;
 	__le16		length;
 	union {
@@ -311,12 +311,12 @@ struct message {
 		struct command_protocol_mt_init	init_mt_command;
 		struct command_protocol_capsl	capsl_command;
 		struct command_protocol_bl	bl_command;
-		__u8				data[0];
+		u8				data[0];
 	};
 };
 
 /* type + zero + counter + rsp_buf_len + length */
-#define MSG_HEADER_SIZE	8
+#define MSG_HEADER_SIZE		8
 
 /**
  * struct spi_packet - a complete spi packet; always 256 bytes. This carries
@@ -344,12 +344,12 @@ struct message {
  *		contrast to the crc in the message).
  */
 struct spi_packet {
-	__u8			flags;
-	__u8			device;
+	u8			flags;
+	u8			device;
 	__le16			offset;
 	__le16			remaining;
 	__le16			length;
-	__u8			data[246];
+	u8			data[246];
 	__le16			crc16;
 };
 
@@ -1318,7 +1318,7 @@ applespi_handle_keyboard_event(struct applespi_data *applespi,
 	       sizeof(applespi->last_keys_pressed));
 }
 
-static const struct applespi_tp_info *applespi_find_touchpad_info(__u8 model)
+static const struct applespi_tp_info *applespi_find_touchpad_info(u8 model)
 {
 	const struct applespi_tp_model_info *info;
 
