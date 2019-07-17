@@ -48,6 +48,7 @@
 #include <linux/efi.h>
 #include <linux/input.h>
 #include <linux/input/mt.h>
+#include <linux/jiffies.h>
 #include <linux/ktime.h>
 #include <linux/leds.h>
 #include <linux/module.h>
@@ -56,7 +57,6 @@
 #include <linux/spi/spi.h>
 #include <linux/version.h>
 #include <linux/wait.h>
-#include <linux/workqueue.h>
 
 #include <asm/barrier.h>
 #include <asm/unaligned.h>
@@ -429,7 +429,13 @@ struct applespi_data {
 	bool				read_active;
 	bool				write_active;
 
-	struct work_struct		work;
+	struct applespi_complete_info {
+		void				(*complete)(void *context);
+		struct applespi_data		*applespi;
+	}				spi_complete[2];
+	bool				cancel_spi;
+
+	wait_queue_head_t		tp_info_complete;
 	struct touchpad_info_protocol	rcvd_tp_info;
 
 	struct dentry			*debugfs_root;
@@ -611,13 +617,61 @@ static void applespi_setup_write_txfrs(struct applespi_data *applespi)
 	spi_message_add_tail(st_t, msg);
 }
 
+static bool applespi_async_outstanding(struct applespi_data *applespi)
+{
+	return applespi->spi_complete[0].complete ||
+	       applespi->spi_complete[1].complete;
+}
+
+static void applespi_async_complete(void *context)
+{
+	struct applespi_complete_info *info = context;
+	struct applespi_data *applespi = info->applespi;
+	unsigned long flags;
+
+	info->complete(applespi);
+
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+
+	info->complete = NULL;
+
+	if (applespi->cancel_spi && !applespi_async_outstanding(applespi))
+		wake_up_all(&applespi->drain_complete);
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+}
+
 static int applespi_async(struct applespi_data *applespi,
 			  struct spi_message *message, void (*complete)(void *))
 {
-	message->complete = complete;
-	message->context = applespi;
+	struct applespi_complete_info *info;
+	int sts;
 
-	return spi_async(applespi->spi, message);
+	if (applespi->cancel_spi) {
+		if (!applespi_async_outstanding(applespi))
+			wake_up_all(&applespi->drain_complete);
+		return -ESHUTDOWN;
+	}
+
+	/*
+	 * There can only be at most 2 spi requests in flight, one for "reads"
+	 * and one for "writes".
+	 */
+	if (!applespi->spi_complete[0].complete)
+		info = &applespi->spi_complete[0];
+	else
+		info = &applespi->spi_complete[1];
+	info->complete = complete;
+	info->applespi = applespi;
+
+	message->complete = applespi_async_complete;
+	message->context = info;
+
+	sts = spi_async(applespi->spi, message);
+	if (sts)
+		info->complete = NULL;
+
+	return sts;
 }
 
 static inline bool applespi_check_write_status(struct applespi_data *applespi,
@@ -800,6 +854,7 @@ static int applespi_setup_spi(struct applespi_data *applespi
 
 	spin_lock_init(&applespi->cmd_msg_lock);
 	init_waitqueue_head(&applespi->drain_complete);
+	init_waitqueue_head(&applespi->tp_info_complete);
 
 	return 0;
 }
@@ -1159,7 +1214,7 @@ static void report_tp_state(struct applespi_data *applespi,
 	const struct applespi_tp_info *tp_info = &applespi->tp_info;
 	int i, n;
 
-	/* touchpad_input_dev is set async in worker */
+	/* touchpad_input_dev is set async in probe */
 	input = smp_load_acquire(&applespi->touchpad_input_dev);
 	if (!input)
 		return;	/* touchpad isn't initialized yet */
@@ -1463,26 +1518,14 @@ applespi_register_touchpad_device(struct applespi_data *applespi,
 	return 0;
 }
 
-static void applespi_worker(struct work_struct *work)
-{
-	struct applespi_data *applespi =
-		container_of(work, struct applespi_data, work);
-
-	applespi_register_touchpad_device(applespi, &applespi->rcvd_tp_info);
-}
-
 static void applespi_handle_cmd_response(struct applespi_data *applespi,
 					 struct spi_packet *packet,
 					 struct message *message)
 {
 	if (packet->device == PACKET_DEV_INFO &&
 	    le16_to_cpu(message->type) == 0x1020) {
-		/*
-		 * We're not allowed to sleep here, but registering an input
-		 * device can sleep.
-		 */
 		applespi->rcvd_tp_info = message->tp_info;
-		schedule_work(&applespi->work);
+		wake_up_all(&applespi->tp_info_complete);
 		return;
 	}
 
@@ -1770,6 +1813,7 @@ static int applespi_probe(struct spi_device *spi)
 	struct applespi_data *applespi;
 	acpi_handle spi_handle = ACPI_HANDLE(&spi->dev);
 	acpi_status acpi_sts;
+	unsigned long flags;
 	int sts, i;
 	unsigned long long gpe, usb_status;
 
@@ -1787,8 +1831,6 @@ static int applespi_probe(struct spi_device *spi)
 		return -ENOMEM;
 
 	applespi->spi = spi;
-
-	INIT_WORK(&applespi->work, applespi_worker);
 
 	/* store the driver data */
 	spi_set_drvdata(spi, applespi);
@@ -1921,6 +1963,22 @@ static int applespi_probe(struct spi_device *spi)
 	/* trigger touchpad setup */
 	applespi_init(applespi, false);
 
+	/* set up the touchpad as a separate input device */
+	sts = wait_event_timeout(applespi->tp_info_complete,
+				 applespi->rcvd_tp_info.model_no,
+				 msecs_to_jiffies(3000));
+	if (!sts) {
+		dev_err(&applespi->spi->dev,
+			"Timed out waiting for device info\n");
+		sts = -ETIMEDOUT;
+		goto cancel_spi;
+	}
+
+	sts = applespi_register_touchpad_device(applespi,
+						&applespi->rcvd_tp_info);
+	if (sts)
+		goto cancel_spi;
+
 	/*
 	 * By default this device is not enabled for wakeup; but USB keyboards
 	 * generally are, so the expectation is that by default the keyboard
@@ -1953,6 +2011,19 @@ static int applespi_probe(struct spi_device *spi)
 			    &applespi_tp_dim_fops);
 
 	return 0;
+
+cancel_spi:
+	acpi_disable_gpe(NULL, applespi->gpe);
+	acpi_remove_gpe_handler(NULL, applespi->gpe, applespi_notify);
+
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
+	applespi->cancel_spi = true;
+	wait_event_lock_irq(applespi->drain_complete,
+			    !applespi_async_outstanding(applespi),
+			    applespi->cmd_msg_lock);
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
+	return sts;
 }
 
 static void applespi_drain_writes(struct applespi_data *applespi)
@@ -1962,8 +2033,10 @@ static void applespi_drain_writes(struct applespi_data *applespi)
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
 	applespi->drain = true;
-	wait_event_lock_irq(applespi->drain_complete, !applespi->write_active,
-			    applespi->cmd_msg_lock);
+	wait_event_lock_irq_timeout(applespi->drain_complete,
+				    !applespi->write_active,
+				    applespi->cmd_msg_lock,
+				    msecs_to_jiffies(3000));
 
 	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
 }
@@ -1974,8 +2047,10 @@ static void applespi_drain_reads(struct applespi_data *applespi)
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
-	wait_event_lock_irq(applespi->drain_complete, !applespi->read_active,
-			    applespi->cmd_msg_lock);
+	wait_event_lock_irq_timeout(applespi->drain_complete,
+				    !applespi->read_active,
+				    applespi->cmd_msg_lock,
+				    msecs_to_jiffies(3000));
 
 	applespi->suspended = true;
 
