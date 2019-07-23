@@ -50,41 +50,27 @@ $ dnf copr enable meeuw/macbook12-spi-driver-kmod
 $ dnf install macbook12-spi-driver-kmod
 ```
 
-What works:
------------
-* Basic Typing
-* FN keys
-* Driver unloading (no more hanging)
-* Basic touchpad functionality (even right click, handled by libinput)
-* MT touchpad functionality (two finger scroll, probably others)
-* Interrupts!
-* Suspend / resume
-
 What doesn't work:
 ------------------
-* Key rollover (properly)
-* Wakeup on keypress / touchpad
- 
-Known bugs:
------------
-* Occasionally, the SPI device can get itself into a state where it causes an interrupt storm. There should be a way of resetting it, or better yet avoiding this state altogether.
-
-Interrupts:
------------
-Interrupts are now working! This means that the driver is no longer polled, and should no longer be a massive battery drain. For more information on how the driver receives interrupts, see the discussion [here](https://github.com/cb22/macbook12-spi-driver/pull/1)
-
-Touchpad:
----------
-The touchpad protocol is the same as the bcm5974 driver. Perhaps there is a nice way of utilizing it? For now, bits of code have just been copy and pasted.
+* Autodetection of ISO layout
+* Resume on MacBook8,1
 
 Debugging:
 ----------
-The `debug` module parameter can be used to turn debugging output on (and off) dynamically, and can be set in all the usual ways (e.g. via kernel command-line (`applespi.debug=0x1`), via sysfs (`echo 0x10000 | sudo tee /sys/module/applespi/parameters/debug`), etc.).
+Packet tracing is exposed via the kernel tracepoints framework. Tracing of individual packet types can be enabled with something like the following:
+```
+echo 1 | sudo tee /sys/kernel/debug/tracing/events/applespi/applespi_keyboard_data/enable
+```
+The packets are then visible in `/sys/kernel/debug/tracing/trace`
 
-Some useful values are (since the value is a bitmask, these can be combined):
-* 0x10000 - determine touchpad values range
-* 0x1     - turn on logging of touchpad initialization packets
-* 0x6     - turn on logging of backlight and caps-lock-led packets
+Trackpad dimensions logging can be enabled with
+```
+echo 1 | sudo tee /sys/kernel/debug/applespi/enable_tp_dim
+```
+and then viewed with something like
+```
+sudo watch /sys/kernel/debug/applespi/tp_dim
+```
 
 Touchbar/ALS/iBridge:
 ---------------------
