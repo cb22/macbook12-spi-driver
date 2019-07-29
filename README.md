@@ -4,7 +4,7 @@ The keyboard / trackpad driver here is now included in the kernel as of v5.3.
 
 NOTE:
 -----
-The touchbar driver was recently refactored; if you're upgrading from the `appletb` driver, please see the [Upgrading](#upgrading) section; if you're running a kernel before 4.16 then please check out the [legacy](../../tree/touchbar-driver-monolithic) branch instead.
+The touchbar driver was refactored in late 2018; if you're upgrading from the `appletb` driver, please see the [Upgrading](#upgrading) section; if you're running a kernel before 4.16 then please check out the [legacy](../../tree/touchbar-driver-monolithic) branch instead.
 
 Using it:
 ---------
@@ -16,6 +16,7 @@ On all other MacBook's and MacBook Pros you need to instead make sure both the `
 
 For best results everywhere, make sure all three modules (this `applespi` driver plus the two core ones mentioned above) are present in your initramfs/initrd so that the keyboard is functional by the time the prompt for the disk password appears. Also, having them loaded early also appears to remove the need for the `irqpoll` kernel parameter on MacBook8,1's.
 
+Lastly, please see the [Keyboard/Touchpad/Touchbar](https://gist.github.com/roadrunner2/1289542a748d9a104e7baec6a92f9cd7#keyboardtouchpadtouchbar) section of my gist for recommended user-space configurations and more details.
 
 DKMS module (Debian & co):
 --------------------------
