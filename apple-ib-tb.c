@@ -809,15 +809,11 @@ static struct usb_interface *appletb_get_usb_iface(struct hid_device *hdev)
 {
 	struct device *dev = &hdev->dev;
 
-	/* find the usb-interface device */
-	if (!dev->bus || strcmp(dev->bus->name, "hid") != 0)
-		return NULL;
+	/* in kernel: is_usb_interface(dev) */
+	while (dev && (!dev->type || strcmp(dev->type->name, "usb_interface")))
+		dev = dev->parent;
 
-	dev = dev->parent;
-	if (!dev || !dev->bus || strcmp(dev->bus->name, "usb") != 0)
-		return NULL;
-
-	return to_usb_interface(dev);
+	return dev ? to_usb_interface(dev) : NULL;
 }
 
 static int appletb_inp_connect(struct input_handler *handler,
