@@ -319,7 +319,7 @@ static void appletb_set_tb_worker(struct work_struct *work)
 {
 	struct appletb_device *tb_dev =
 		container_of(work, struct appletb_device, tb_work.work);
-	s64 time_left, min_timeout, time_to_off;
+	s64 time_left = 0, min_timeout, time_to_off;
 	unsigned char pending_mode;
 	unsigned char pending_disp;
 	unsigned char current_disp;
