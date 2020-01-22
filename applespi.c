@@ -73,6 +73,18 @@
 #include <linux/notifier.h>
 #endif
 
+#ifndef sizeof_field
+#define sizeof_field(TYPE, MEMBER)	sizeof((((TYPE *)0)->MEMBER))
+#endif
+
+#ifndef struct_size
+#define struct_size(p, member, n)	(sizeof(*(p)) + n * sizeof(*(p)->member))
+#endif
+
+#ifndef wait_event_lock_irq_timeout
+#define wait_event_lock_irq_timeout	wait_event_interruptible_lock_irq_timeout
+#endif
+
 #define APPLESPI_PACKET_SIZE	256
 #define APPLESPI_STATUS_SIZE	4
 
