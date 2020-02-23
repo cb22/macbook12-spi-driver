@@ -639,13 +639,19 @@ static void applespi_async_complete(void *context)
 {
 	struct applespi_complete_info *info = context;
 	struct applespi_data *applespi = info->applespi;
+	void (*complete)(void *);
 	unsigned long flags;
-
-	info->complete(applespi);
 
 	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
+	complete = info->complete;
 	info->complete = NULL;
+
+	spin_unlock_irqrestore(&applespi->cmd_msg_lock, flags);
+
+	complete(applespi);
+
+	spin_lock_irqsave(&applespi->cmd_msg_lock, flags);
 
 	if (applespi->cancel_spi && !applespi_async_outstanding(applespi))
 		wake_up_all(&applespi->drain_complete);
