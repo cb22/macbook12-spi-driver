@@ -55,6 +55,8 @@
 #include <linux/platform_device.h>
 #include <linux/spinlock.h>
 #include <linux/spi/spi.h>
+#include <linux/string.h>
+#include <linux/trace_events.h>
 #include <linux/version.h>
 #include <linux/wait.h>
 
@@ -131,6 +133,10 @@ static char touchpad_dimensions[40];
 module_param_string(touchpad_dimensions, touchpad_dimensions,
 		    sizeof(touchpad_dimensions), 0444);
 MODULE_PARM_DESC(touchpad_dimensions, "The pixel dimensions of the touchpad, as XxY+W+H .");
+
+static char* trace_event;
+module_param(trace_event, charp, 0444);
+MODULE_PARM_DESC(trace_event, "Enable early event tracing. It takes the form of a comma-separated list of events to enable.");
 
 /**
  * struct keyboard_protocol - keyboard message.
@@ -1828,6 +1834,30 @@ static void applespi_save_bl_level(struct applespi_data *applespi,
 			 "Error saving backlight level to EFI vars: %d\n", sts);
 }
 
+static void applespi_enable_early_event_tracing(struct device *dev)
+{
+	char *buf, *event;
+	int sts;
+
+	if (trace_event && trace_event[0]) {
+		buf = kstrdup(trace_event, GFP_KERNEL);
+		if (!buf)
+			return;
+
+		while ((event = strsep(&buf, ","))) {
+			if (event[0]) {
+				sts = trace_set_clr_event("applespi", event, 1);
+				if (sts)
+					dev_warn(dev,
+						 "Error setting trace event '%s': %d\n",
+						 event, sts);
+			}
+		}
+
+		kfree(buf);
+	}
+}
+
 static int applespi_probe(struct spi_device *spi)
 {
 	struct applespi_data *applespi;
@@ -1836,6 +1866,8 @@ static int applespi_probe(struct spi_device *spi)
 	unsigned long flags;
 	int sts, i;
 	unsigned long long gpe, usb_status;
+
+	applespi_enable_early_event_tracing(&spi->dev);
 
 	/* check if the USB interface is present and enabled already */
 	acpi_sts = acpi_evaluate_integer(spi_handle, "UIST", NULL, &usb_status);
