@@ -1,4 +1,10 @@
-Very simple, work in progress input driver for the SPI keyboard / trackpad found on 12" MacBooks (2015 and later) and newer MacBook Pros (late 2016 and later).
+Input driver for the SPI keyboard / trackpad found on 12" MacBooks (2015 and later) and newer MacBook Pros (late 2016 through mid 2018), as well a simple touchbar and ambient-light-sensor driver for late 2016 MacBook Pro's and later.
+
+The keyboard / trackpad driver here is now included in the kernel as of v5.3.
+
+NOTE:
+-----
+The touchbar driver was refactored in late 2018; if you're upgrading from the `appletb` driver, please see the [Upgrading](#upgrading) section; if you're running a kernel before 4.16 then please check out the [legacy](../../tree/touchbar-driver-monolithic) branch instead.
 
 Using it:
 ---------
@@ -10,6 +16,7 @@ On all other MacBook's and MacBook Pros you need to instead make sure both the `
 
 For best results everywhere, make sure all three modules (this `applespi` driver plus the two core ones mentioned above) are present in your initramfs/initrd so that the keyboard is functional by the time the prompt for the disk password appears. Also, having them loaded early also appears to remove the need for the `irqpoll` kernel parameter on MacBook8,1's.
 
+Lastly, please see the [Keyboard/Touchpad/Touchbar](https://gist.github.com/roadrunner2/1289542a748d9a104e7baec6a92f9cd7#keyboardtouchpadtouchbar) section of my gist for recommended user-space configurations and more details.
 
 DKMS module (Debian & co):
 --------------------------
@@ -18,7 +25,7 @@ As root, do the following (all MacBook's and MacBook Pro's except MacBook8,1 (20
 echo -e "\n# applespi\napplespi\nspi_pxa2xx_platform\nintel_lpss_pci" >> /etc/initramfs-tools/modules
 
 apt install dkms
-git clone https://github.com/cb22/macbook12-spi-driver.git /usr/src/applespi-0.1
+git clone https://github.com/roadrunner2/macbook12-spi-driver.git /usr/src/applespi-0.1
 dkms install -m applespi -v 0.1
 ```
 
@@ -27,45 +34,56 @@ If you're on a MacBook8,1 (2015):
 echo -e "\n# applespi\napplespi\nspi_pxa2xx_platform\nspi_pxa2xx_pci" >> /etc/initramfs-tools/modules
 
 apt install dkms
-git clone https://github.com/cb22/macbook12-spi-driver.git /usr/src/applespi-0.1
+git clone https://github.com/roadrunner2/macbook12-spi-driver.git /usr/src/applespi-0.1
 dkms install -m applespi -v 0.1
 ```
 
-What works:
------------
-* Basic Typing
-* FN keys
-* Driver unloading (no more hanging)
-* Basic touchpad functionality (even right click, handled by libinput)
-* MT touchpad functionality (two finger scroll, probably others)
-* Interrupts!
-* Suspend / resume
+Akmods module (RPM Fusion / Red Hat & co):
+------------------------------------------
+You can build the akmod package from this repository:
+
+https://pagure.io/fedora-macbook12-spi-driver-kmod
+
+Or use this [copr repository](https://copr.fedorainfracloud.org/coprs/meeuw/macbook12-spi-driver-kmod/):
+```
+$ dnf copr enable meeuw/macbook12-spi-driver-kmod
+
+$ dnf install macbook12-spi-driver-kmod
+```
 
 What doesn't work:
 ------------------
-* Key rollover (properly)
-* Wakeup on keypress / touchpad
- 
-Known bugs:
------------
-* Occasionally, the SPI device can get itself into a state where it causes an interrupt storm. There should be a way of resetting it, or better yet avoiding this state altogether.
-
-Interrupts:
------------
-Interrupts are now working! This means that the driver is no longer polled, and should no longer be a massive battery drain. For more information on how the driver receives interrupts, see the discussion [here](https://github.com/cb22/macbook12-spi-driver/pull/1)
-
-Touchpad:
----------
-The touchpad protocol is the same as the bcm5974 driver. Perhaps there is a nice way of utilizing it? For now, bits of code have just been copy and pasted.
+* Autodetection of ISO layout
+* Resume on MacBook8,1
 
 Debugging:
 ----------
-The `debug` module parameter can be used to turn debugging output on (and off) dynamically, and can be set in all the usual ways (e.g. via kernel command-line (`applespi.debug=0x1`), via sysfs (`echo 0x10000 | sudo tee /sys/module/applespi/parameters/debug`), etc.).
+Packet tracing is exposed via the kernel tracepoints framework. Tracing of individual packet types can be enabled with something like the following:
+```
+echo 1 | sudo tee /sys/kernel/debug/tracing/events/applespi/applespi_keyboard_data/enable
+```
+The packets are then visible in `/sys/kernel/debug/tracing/trace`
 
-Some useful values are (since the value is a bitmask, these can be combined):
-* 0x10000 - determine touchpad values range
-* 0x1     - turn on logging of touchpad initialization packets
-* 0x6     - turn on logging of backlight and caps-lock-led packets
+Trackpad dimensions logging can be enabled with
+```
+echo 1 | sudo tee /sys/kernel/debug/applespi/enable_tp_dim
+```
+and then viewed with something like
+```
+sudo watch /sys/kernel/debug/applespi/tp_dim
+```
+
+Touchbar/ALS/iBridge:
+---------------------
+The touchbar and ambient-light-sensor (ALS) are part of the iBridge chip, and hence there are 3 modules corresponding to these (`apple_ibridge`, `apple_ib_tb`, and `apple_ib_als`). Generally loading any one of these will load the others, unless you are loading them via `insmod`. If loading manually (i.e. via `insmod`), you need to first load the `industrialio_triggered_buffer` module.
+
+The touchbar driver provides basic touchbar functionality (enabling the touchbar and switching between modes based on the FN key). The touchbar is automatically dimmed and later switched off if no (internal) keyboard, touchpad, or touchbar input is received for a period of time; any (internal) keyboard, touchpad, or touchbar input switches it back on. The timeouts till the touchbar is dimmed and turned off can be changed via the `idle_timeout` and `dim_timeout` module params or sysfs attributes (`/sys/class/input/input9/device/...`); they default to 5 min and 4.5 min, respectively. See also `modinfo apple_ib_tb`.
+
+The ALS driver exposes the ambient light sensor; if you have the `iio-sensor-proxy` installed then it should be recognized and handled automatically.
+
+Upgrading:
+----------
+The touchbar and ALS drivers used to be in a single module, `appletb`. This has now been split up into 3 modules, `apple_ibridge`, `apple_ib_tb`, and `apple_ib_als`. Generally whereever you were using `appletb` (e.g. in the initrd/dracut/whatever configs) you want to use `apple_ib_tb` now. Also, make sure to remove the old `appletb` module, either by first doing a `sudo dkms remove applespi/0.1 --all` before upgrading, or by manually removing the driver (e.g. `sudo find /lib/modules/ -name appletb.ko | xargs rm`).
 
 Some useful threads:
 --------------------
